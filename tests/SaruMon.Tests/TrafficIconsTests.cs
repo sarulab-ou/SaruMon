@@ -97,21 +97,33 @@ internal static class TrafficIconsTests
 
     private static void CpuBarFillsByPercentage()
     {
-        using var icons = new CpuUsageIcons(16);
-        using var unavailable = icons.GetIcon(null).ToBitmap();
-        using var idle = icons.GetIcon(0).ToBitmap();
-        using var half = icons.GetIcon(50).ToBitmap();
-        using var full = icons.GetIcon(100).ToBitmap();
-        var blue = full.GetPixel(2, 12).ToArgb();
-        var track = idle.GetPixel(2, 12).ToArgb();
-        Assert(blue != track && idle.GetPixel(2, 12) != unavailable.GetPixel(2, 12),
-            "CPU load, idle, and unavailable states must be visually distinguishable.");
-        for (var x = 2; x < 14; x++)
+        foreach (var (size, border, top) in new[] { (16, 1, 3), (20, 1, 4), (24, 2, 5), (32, 2, 6) })
         {
-            Assert(half.GetPixel(x, 12).ToArgb() == (x < 8 ? blue : track), "Half CPU load must fill half the bar from the left.");
-            Assert(full.GetPixel(x, 12).ToArgb() == blue, "Full CPU load must fill the entire bar.");
+            using var icons = new CpuUsageIcons(size);
+            using var unavailable = icons.GetIcon(null).ToBitmap();
+            using var idle = icons.GetIcon(0).ToBitmap();
+            using var half = icons.GetIcon(50).ToBitmap();
+            using var full = icons.GetIcon(100).ToBitmap();
+            var center = size / 2;
+            var blue = Color.FromArgb(87, 192, 255).ToArgb();
+            var track = Color.FromArgb(150, 150, 160).ToArgb();
+            var markerRow = (size - border) / 2;
+            Assert(idle.GetPixel(center, markerRow) != unavailable.GetPixel(center, markerRow),
+                "Idle and unavailable states must be visually distinguishable.");
+            Assert(half.GetPixel(center, 0).A == 0 && half.GetPixel(center, size - 1).A == 0,
+                "The horizontal meter must have transparent space above and below it.");
+            for (var y = top; y < size - top; y++)
+            {
+                for (var x = border; x < size - border; x++)
+                {
+                    Assert(idle.GetPixel(x, y).ToArgb() == track, "The empty CPU meter must have a plain track.");
+                    Assert(half.GetPixel(x, y).ToArgb() == (x < center ? blue : track),
+                        "Half CPU load must fill the left half of the full-height track.");
+                    Assert(full.GetPixel(x, y).ToArgb() == blue, "Full CPU load must fill the entire track.");
+                }
+            }
+            Assert(ReferenceEquals(icons.GetIcon(50), icons.GetIcon(51)), "Equal bar widths must reuse the cached CPU icon.");
         }
-        Assert(ReferenceEquals(icons.GetIcon(50), icons.GetIcon(51)), "Equal bar widths must reuse the cached CPU icon.");
     }
 
     internal static void WritePreview(string outputPath)

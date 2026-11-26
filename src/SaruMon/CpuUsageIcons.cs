@@ -2,18 +2,11 @@ namespace SaruMon;
 
 internal sealed class CpuUsageIcons : IDisposable
 {
-    private static readonly Color BarColor = Color.FromArgb(28, 104, 210);
-    private static readonly string[] Label =
-    [
-        "### ### # #",
-        "#   # # # #",
-        "#   ### # #",
-        "#   #   # #",
-        "### #   ###"
-    ];
+    private static readonly Color BarColor = Color.FromArgb(87, 192, 255);
+    private static readonly Color TrackColor = Color.FromArgb(150, 150, 160);
 
     private readonly int size;
-    private readonly int inset;
+    private readonly int borderWidth;
     private readonly int trackWidth;
     private readonly Icon?[] byWidth;
     private bool disposed;
@@ -21,8 +14,8 @@ internal sealed class CpuUsageIcons : IDisposable
     public CpuUsageIcons(int size)
     {
         this.size = size;
-        inset = Scale(2);
-        trackWidth = size - 2 * inset;
+        borderWidth = Math.Max(1, Scale(1));
+        trackWidth = size - 2 * borderWidth;
         byWidth = new Icon?[trackWidth + 2];
     }
 
@@ -42,32 +35,22 @@ internal sealed class CpuUsageIcons : IDisposable
     {
         using var bitmap = new Bitmap(size, size);
         using var graphics = Graphics.FromImage(bitmap);
-        graphics.Clear(Color.White);
-        using var border = new Pen(Color.FromArgb(169, 179, 190));
-        graphics.DrawRectangle(border, 0, 0, size - 1, size - 1);
-        using var ink = new SolidBrush(Color.FromArgb(31, 44, 63));
-        for (var row = 0; row < Label.Length; row++)
-        {
-            for (var column = 0; column < Label[row].Length; column++)
-            {
-                if (Label[row][column] != '#') continue;
-                graphics.FillRectangle(ink, Rectangle.FromLTRB(Scale(2 + column), Scale(3 + row),
-                    Scale(3 + column), Scale(4 + row)));
-            }
-        }
+        graphics.Clear(Color.Transparent);
 
-        using var track = new SolidBrush(Color.FromArgb(218, 227, 240));
-        var top = Scale(10);
-        var height = Scale(14) - top;
+        var top = Scale(3);
+        var height = size - 2 * top;
+        using var frame = new SolidBrush(Color.FromArgb(76, 94, 113));
+        graphics.FillRectangle(frame, 0, top - borderWidth, size, height + 2 * borderWidth);
+        using var track = new SolidBrush(TrackColor);
+        graphics.FillRectangle(track, borderWidth, top, trackWidth, height);
         if (width < 0)
         {
-            graphics.FillRectangle(track, Scale(6), Scale(11), Scale(10) - Scale(6), Math.Max(1, Scale(1)));
+            graphics.FillRectangle(frame, Scale(6), (size - borderWidth) / 2, Scale(10) - Scale(6), borderWidth);
         }
-        else
+        else if (width > 0)
         {
-            graphics.FillRectangle(track, inset, top, trackWidth, height);
             using var bar = new SolidBrush(BarColor);
-            graphics.FillRectangle(bar, inset, top, width, height);
+            graphics.FillRectangle(bar, borderWidth, top, width, height);
         }
 
         return TrayIconImage.FromBitmap(bitmap);
