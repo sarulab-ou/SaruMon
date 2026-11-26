@@ -15,7 +15,7 @@ internal sealed class MainForm : Form
     private readonly Stopwatch clock = Stopwatch.StartNew();
     private readonly TrafficIcons icons = new(SystemInformation.SmallIconSize.Width);
     private readonly NotifyIcon tray;
-    private readonly System.Windows.Forms.Timer timer = new() { Interval = 500 };
+    private readonly System.Windows.Forms.Timer timer = new() { Interval = 1000 };
     private readonly ComboBox adapter = new() { DropDownStyle = ComboBoxStyle.DropDownList, MaxDropDownItems = 12, Dock = DockStyle.Fill, AccessibleName = "監視するインタフェース" };
     private readonly Label adapterDetail = new() { Dock = DockStyle.Fill, AutoEllipsis = true, ForeColor = Color.FromArgb(104, 116, 134) };
     private readonly Label connection = new() { AutoSize = true, Anchor = AnchorStyles.Right, Padding = new Padding(10, 8, 10, 8) };
@@ -28,10 +28,10 @@ internal sealed class MainForm : Form
     private readonly ConnectionsView connections = new();
     private readonly UdpConnectionsView udpConnections = new();
     private readonly ToolTip tips = new();
-    private readonly CheckBox unicastOnly = new() { Text = "ユニキャスト通信だけで矢印を表示", AutoSize = true, Anchor = AnchorStyles.Left };
-    private readonly ToolStripMenuItem unicastOnlyMenu = new("ユニキャスト通信だけで矢印を表示") { CheckOnClick = true };
-    private readonly CheckBox tcpIndicator = new() { Text = "TCP通信の目安で矢印を表示", AutoSize = true };
-    private readonly ToolStripMenuItem tcpIndicatorMenu = new("TCP通信の目安で矢印を表示") { CheckOnClick = true };
+    private readonly CheckBox unicastOnly = new() { Text = "ユニキャスト通信だけで棒を表示", AutoSize = true, Anchor = AnchorStyles.Left };
+    private readonly ToolStripMenuItem unicastOnlyMenu = new("ユニキャスト通信だけで棒を表示") { CheckOnClick = true };
+    private readonly CheckBox tcpIndicator = new() { Text = "TCP通信の目安で棒を表示", AutoSize = true };
+    private readonly ToolStripMenuItem tcpIndicatorMenu = new("TCP通信の目安で棒を表示") { CheckOnClick = true };
     private readonly CheckBox tcpOnly = new() { Text = "TCP通信だけを表示（管理者権限）", AutoSize = true, Anchor = AnchorStyles.Left };
     private readonly ToolStripMenuItem tcpOnlyMenu = new("TCP通信だけを表示（管理者権限）");
     private readonly bool startHidden;
@@ -117,7 +117,7 @@ internal sealed class MainForm : Form
         var legend = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty, Padding = new Padding(0, 5, 0, 0) };
         foreach (var (state, text) in new[] { (TrafficState.Receiving, "↓ 受信"), (TrafficState.Sending, "↑ 送信"), (TrafficState.Idle, "□ 通信なし"), (TrafficState.Offline, "× 未接続") })
             legend.Controls.Add(new Label { Text = text, AutoSize = true, ForeColor = TrafficIcons.ColorFor(state), Margin = new Padding(0, 0, 18, 0) });
-        tips.SetToolTip(legend, "下りは緑、上りは赤。白地に、通信があった方向の矢印だけを固定色で表示します。");
+        tips.SetToolTip(legend, "アイコンの左は受信（緑、上から下）、右は送信（赤、下から上）です。棒の高さは1秒ごとの通信量に応じて変わります。");
         trafficLayout.Controls.Add(legend, 0, 2);
         trafficPage.Controls.Add(trafficLayout);
         peersPage.Controls.Add(connections);
@@ -152,7 +152,7 @@ internal sealed class MainForm : Form
         options.Controls.Add(hide, 1, 0);
         unicastOnly.Checked = settings.UnicastOnlyIndicator;
         unicastOnlyMenu.Checked = settings.UnicastOnlyIndicator;
-        tips.SetToolTip(unicastOnly, "ブロードキャスト・マルチキャストを矢印の判定から除きます。TCP・UDPとLAN内の個別通信は含みます。\n速度・合計・グラフは全通信のままです。管理者権限は不要です。");
+        tips.SetToolTip(unicastOnly, "ユニキャスト通信があった方向だけ棒を表示します。高さはその方向の全通信量です。\n管理者権限は不要です。");
         tcpIndicator.Checked = settings.TcpActivityIndicator;
         tcpIndicatorMenu.Checked = settings.TcpActivityIndicator;
         tips.SetToolTip(tcpIndicator, "選択した回線とPC全体のTCPで、同じ計測区間に通信が増えた方向を表示します。\nPC内のTCPと回線上のUDPが重なる場合も点灯します。管理者権限は不要です。");
@@ -160,9 +160,9 @@ internal sealed class MainForm : Form
         indicatorOptions.Controls.AddRange([unicastOnly, tcpIndicator]);
         options.Controls.Add(indicatorOptions, 0, 1);
         options.SetColumnSpan(indicatorOptions, 2);
-        tips.SetToolTip(tcpOnly, "選択したインタフェースのローカルIPでTCPを観測し、速度・合計・グラフ・矢印に表示します。\n相手ごとのTCP監視と同じ観測を使い、このPC内で完結する通信は表示から除きます。");
+        tips.SetToolTip(tcpOnly, "選択したインタフェースのローカルIPでTCPを観測し、速度・合計・グラフ・通知領域の棒に表示します。\n相手ごとのTCP監視と同じ観測を使い、このPC内で完結する通信は表示から除きます。");
         body.Controls.Add(options, 0, 5);
-        footer.Text = "0.5秒ごとに更新 · × を押しても監視を続けます";
+        footer.Text = "1秒ごとに更新 · × を押しても監視を続けます";
         footer.Dock = DockStyle.Fill;
         footer.TextAlign = ContentAlignment.MiddleLeft;
         body.Controls.Add(footer, 0, 6);
@@ -255,7 +255,7 @@ internal sealed class MainForm : Form
     private void Poll()
     {
         if (exiting) return;
-        if (++tick % 10 == 0) RefreshAdapters();
+        if (++tick % 5 == 0) RefreshAdapters();
         var selected = adapter.SelectedItem as AdapterChoice;
         var sample = selected == null ? null : sampler.Sample(TrafficNetwork.ReadCounters(selected.Id), clock.Elapsed);
         latestSample = sample;
@@ -349,7 +349,7 @@ internal sealed class MainForm : Form
         try { settings.Save(); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            footer.Text = "矢印の設定を保存できませんでした。次回起動時は再設定してください。";
+            footer.Text = "アイコンの設定を保存できませんでした。次回起動時は再設定してください。";
         }
     }
 
@@ -387,14 +387,17 @@ internal sealed class MainForm : Form
         var mode = tcpOnlyMode ? "TCP観測" : useTcp ? (onlyUnicast ? "TCP目安・ユニキャスト" : "TCP目安") : (onlyUnicast ? "ユニキャスト" : "全通信");
         connection.Text = "● " + (tcpOnlyMode || useTcp || onlyUnicast ? mode + " " : "") + status;
         connection.ForeColor = TrafficIcons.ColorFor(state);
-        var trafficIcon = icons.GetIcon(sample?.IsAvailable == true, receiving ? 1 : 0, sending ? 1 : 0);
+        var download = tcpOnlyMode ? tcpTraffic?.DownloadBytesPerSecond : sample?.DownloadBytesPerSecond;
+        var upload = tcpOnlyMode ? tcpTraffic?.UploadBytesPerSecond : sample?.UploadBytesPerSecond;
+        var trafficIcon = icons.GetIcon(sample?.IsAvailable == true, receiving ? download.GetValueOrDefault() : 0,
+            sending ? upload.GetValueOrDefault() : 0);
         // Icons are cached. Avoid repeated shell/window notifications while the state is unchanged.
         if (!ReferenceEquals(tray.Icon, trafficIcon)) tray.Icon = trafficIcon;
         if (!ReferenceEquals(Icon, trafficIcon)) Icon = trafficIcon;
         var name = (adapter.SelectedItem as AdapterChoice)?.Interface?.Name ?? "未選択";
         if (name.Length > 10) name = name[..9] + "…";
         var scope = tcpOnlyMode ? "TCP" : "全体";
-        var tooltip = $"SaruMon · {name}\n矢印: {mode} · {status}\n{scope} ↓ {receiveRate.Text} ↑ {sendRate.Text}";
+        var tooltip = $"SaruMon · {name}\n棒: {mode} · {status}\n{scope} ↓ {receiveRate.Text} ↑ {sendRate.Text}";
         if (tooltip.Length > 63) tooltip = tooltip[..63];
         if (tray.Text != tooltip) tray.Text = tooltip;
     }
@@ -422,11 +425,11 @@ internal sealed class MainForm : Form
     }
 
     private void ShowTrayHelp() => MessageBox.Show(this,
-        "1. タスクバー右端の ∧（隠れているアイコン）を開きます。\n2. SaruMon の上下矢印アイコンを、時計の近くの通知領域へドラッグします。\n\nWindows の「タスクバーの設定 → その他のシステム トレイ アイコン」からも表示を選べます。同名の項目が複数ある場合は、動いているアイコンを直接ドラッグしてください。\n\nスタートアップ登録は、ログイン時にアプリを起動する設定です。アイコンを常に表示する設定とは別です。",
+        "1. タスクバー右端の ∧（隠れているアイコン）を開きます。\n2. SaruMon の棒グラフのアイコンを、時計の近くの通知領域へドラッグします。\n\nWindows の「タスクバーの設定 → その他のシステム トレイ アイコン」からも表示を選べます。同名の項目が複数ある場合は、動いているアイコンを直接ドラッグしてください。\n\nスタートアップ登録は、ログイン時にアプリを起動する設定です。アイコンを常に表示する設定とは別です。",
         "SaruMon アイコンを常に表示する", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
     private void ShowHelp() => MessageBox.Show(this,
-        "1. 監視するインタフェースを選択します。\n2. 通知領域に格納すると、白地の矢印で通信を確認できます。\n\n下り（受信）: 緑の下矢印 / 上り（送信）: 赤の上矢印\n色の濃さは固定です。0.5秒ごとに、通信があった方向の矢印を表示します。\n通信がない方向の矢印は消え、未接続はオレンジの × です。\n「ユニキャスト通信だけで矢印を表示」をオンにすると、ブロードキャスト・マルチキャストでは矢印を表示しません。\n管理者権限は不要で、TCP・UDPとLAN内の個別通信を含みます。設定は次回起動時も引き継ぎます。\n「TCP通信の目安で矢印を表示」では、選択した回線とPC全体のTCPで同じ区間に通信が増えた方向を点灯します。\nPC内や別回線のTCPが選択回線のUDPと重なると点灯する場合があります。管理者権限は不要です。\n「TCP通信だけを表示（管理者権限）」をオンにすると、選択したインタフェースのローカルIPに対応するTCPの矢印・速度・合計・グラフを表示します。\nPC内で完結する通信は除きます。TCP観測は起動時にオフです。\n通常時と目安モードの速度・合計・グラフはインタフェース全体の値です。\n速度の単位はバイト/秒です（1 KiB = 1,024 B）。\n合計は現在のインタフェースを選択してからの通信量です。\n\n「接続先（TCP）」タブで IP・宛先ポート・接続状態を確認できます。\n「相手ごとの通信量」で監視を開始すると、相手 IP ごとの上り・下り合計を記録します。\n「ログを保存」で、相手 IP・名前・上り合計・下り合計・接続回数・開始時刻・最終時刻を CSV に保存できます。\n「リセット」で相手別ログを消去します。監視中は新しい集計を続けます。\n接続回数は監視中に観測した分です。監視前からの接続は回数に含めません。\n開始・最終時刻は、その相手を最初・最後に観測した時刻です。\n「逆引き」をオンにすると、DNS で取得したホスト名も表示します。\nホスト名は閲覧サイト名とは限りません。\n\n「UDP 送信先」で「開始」を押すと、管理者承認後に UDP 送信を記録します。\n「保存」で、開始時刻・最終時刻・送信イベント数・累積送信量を CSV に保存できます。\nUDP の開始・最終時刻は、最初・最後に送信を観測した時刻です。\n監視開始前の通信は含みません。停止後も保存でき、再開・インタフェース変更で記録をクリアします。\n\nアイコンが隠れている場合は、タスクバー右端の ∧ を開き、SaruMon を時計の近くへドラッグしてください。\nアイコンのクリック、または SaruMon の再起動で画面が開きます。\n終了するには、メニューの「終了」を選びます。\n\n更新は「ヘルプ → 更新を確認」から実行できます。",
+        "1. 監視するインタフェースを選択します。\n2. 通知領域に格納すると、白地の棒グラフで通信量を確認できます。\n\n左の緑は受信で、上から下へ伸びます。右の赤は送信で、下から上へ伸びます。\n1秒ごとに、通信量に応じて1ピクセル刻みで伸びます。1 KiB/s以下の通信は1ピクセル、16 MiB/s以上は最大の高さです。\n通信がない方向の棒は消え、未接続はオレンジの × です。\n「ユニキャスト通信だけで棒を表示」をオンにすると、ユニキャスト通信があった方向だけ棒を表示します。高さはその方向の全通信量です。\n管理者権限は不要で、TCP・UDPとLAN内の個別通信を含みます。設定は次回起動時も引き継ぎます。\n「TCP通信の目安で棒を表示」では、選択した回線とPC全体のTCPで同じ区間に通信が増えた方向を表示します。高さはその方向の全通信量です。\nPC内や別回線のTCPが選択回線のUDPと重なると点灯する場合があります。管理者権限は不要です。\n「TCP通信だけを表示（管理者権限）」をオンにすると、選択したインタフェースのローカルIPに対応するTCPの棒・速度・合計・グラフを表示します。\nPC内で完結する通信は除きます。TCP観測は起動時にオフです。\n通常時と目安モードの速度・合計・グラフはインタフェース全体の値です。\n速度の単位はバイト/秒です（1 KiB = 1,024 B）。\n合計は現在のインタフェースを選択してからの通信量です。\n\n「接続先（TCP）」タブで IP・宛先ポート・接続状態を確認できます。\n「相手ごとの通信量」で監視を開始すると、相手 IP ごとの上り・下り合計を記録します。\n「ログを保存」で、相手 IP・名前・上り合計・下り合計・接続回数・開始時刻・最終時刻を CSV に保存できます。\n「リセット」で相手別ログを消去します。監視中は新しい集計を続けます。\n接続回数は監視中に観測した分です。監視前からの接続は回数に含めません。\n開始・最終時刻は、その相手を最初・最後に観測した時刻です。\n「逆引き」をオンにすると、DNS で取得したホスト名も表示します。\nホスト名は閲覧サイト名とは限りません。\n\n「UDP 送信先」で「開始」を押すと、管理者承認後に UDP 送信を記録します。\n「保存」で、開始時刻・最終時刻・送信イベント数・累積送信量を CSV に保存できます。\n「リセット」で UDP 送信先ログを消去します。監視中はリセット後の送信から集計を続けます。\nUDP の開始・最終時刻は、最初・最後に送信を観測した時刻です。\n監視開始前の通信は含みません。停止後も保存でき、再開・インタフェース変更で記録をクリアします。\n\nアイコンが隠れている場合は、タスクバー右端の ∧ を開き、SaruMon を時計の近くへドラッグしてください。\nアイコンのクリック、または SaruMon の再起動で画面が開きます。\n終了するには、メニューの「終了」を選びます。\n\n更新は「ヘルプ → 更新を確認」から実行できます。",
         "SaruMon の使い方", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
     public async void RequestExit()

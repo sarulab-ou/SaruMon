@@ -12,27 +12,20 @@ $frames = [Collections.Generic.List[object]]::new()
 foreach ($size in @(16, 20, 24, 32, 48, 64, 128, 256)) {
     $bitmap = [Drawing.Bitmap]::new($size, $size, [Drawing.Imaging.PixelFormat]::Format32bppArgb)
     $graphics = [Drawing.Graphics]::FromImage($bitmap)
-    # Match the active arrows in TrafficIcons, drawn on the 16-pixel grid.
+    # Match the two directions of the notification area's bar display.
     $border = [Drawing.Pen]::new([Drawing.Color]::FromArgb(169, 179, 190), 1)
-    $receive = [Drawing.Pen]::new([Drawing.Color]::FromArgb(0, 140, 62), 2)
-    $send = [Drawing.Pen]::new([Drawing.Color]::FromArgb(210, 24, 35), 2)
+    $receive = [Drawing.SolidBrush]::new([Drawing.Color]::FromArgb(0, 140, 62))
+    $send = [Drawing.SolidBrush]::new([Drawing.Color]::FromArgb(210, 24, 35))
     $stream = [IO.MemoryStream]::new()
     $frameWriter = [IO.BinaryWriter]::new($stream)
     try {
         $graphics.Clear([Drawing.Color]::White)
         $graphics.DrawRectangle($border, 0, 0, ($size - 1), ($size - 1))
-        $graphics.SmoothingMode = [Drawing.Drawing2D.SmoothingMode]::AntiAlias
-        $graphics.ScaleTransform($size / 16.0, $size / 16.0)
-        foreach ($pen in @($receive, $send)) {
-            $pen.StartCap = $pen.EndCap = [Drawing.Drawing2D.LineCap]::Round
-            $pen.LineJoin = [Drawing.Drawing2D.LineJoin]::Round
-        }
-        $graphics.DrawLine($receive, [single]4.5, [single]3.5, [single]4.5, [single]12)
-        $graphics.DrawLines($receive, [Drawing.PointF[]]@(
-            [Drawing.PointF]::new(2.5, 9), [Drawing.PointF]::new(4.5, 12), [Drawing.PointF]::new(6.5, 9)))
-        $graphics.DrawLine($send, [single]11.5, [single]12.5, [single]11.5, [single]4)
-        $graphics.DrawLines($send, [Drawing.PointF[]]@(
-            [Drawing.PointF]::new(9.5, 7), [Drawing.PointF]::new(11.5, 4), [Drawing.PointF]::new(13.5, 7)))
+        $laneWidth = [int][Math]::Floor(($size - 3) / 2)
+        $receiveHeight = [int][Math]::Floor(($size - 2) * 2 / 3)
+        $sendHeight = [int][Math]::Floor(($size - 2) / 2)
+        $graphics.FillRectangle($receive, 1, 1, $laneWidth, $receiveHeight)
+        $graphics.FillRectangle($send, ($size - 1 - $laneWidth), ($size - 1 - $sendHeight), $laneWidth, $sendHeight)
         $graphics.Flush()
         $locked = $bitmap.LockBits([Drawing.Rectangle]::new(0, 0, $size, $size), [Drawing.Imaging.ImageLockMode]::ReadOnly, [Drawing.Imaging.PixelFormat]::Format32bppArgb)
         try {

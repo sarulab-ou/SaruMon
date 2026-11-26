@@ -36,7 +36,7 @@ internal static class TrafficMonitorHelper
         var trafficClock = new Stopwatch();
         var stateGate = new object();
         long revision = 0;
-        (uint Events, uint Buffers) peerLossBaseline = default;
+        (uint Events, uint Buffers) logLossBaseline = default;
         try
         {
             using var parent = Process.GetProcessById(arguments.ParentId);
@@ -65,8 +65,8 @@ internal static class TrafficMonitorHelper
             source = new ETWTraceEventSource(sessionName, TraceEventSourceType.Session);
             if (udpTracker is not null)
             {
-                source.Kernel.UdpIpSend += data => udpTracker.Record(data.saddr, data.sport, data.daddr, data.dport, data.size);
-                source.Kernel.UdpIpSendIPV6 += data => udpTracker.Record(data.saddr, data.sport, data.daddr, data.dport, data.size);
+                source.Kernel.UdpIpSend += data => udpTracker.Record(data.saddr, data.sport, data.daddr, data.dport, data.size, CaptureTimestamp(data));
+                source.Kernel.UdpIpSendIPV6 += data => udpTracker.Record(data.saddr, data.sport, data.daddr, data.dport, data.size, CaptureTimestamp(data));
             }
             if (tcpTracker is not null)
             {
@@ -113,11 +113,13 @@ internal static class TrafficMonitorHelper
                             SetAddresses(Array.Empty<IPAddress>());
                             SetAddresses(updated);
                         }
-                        else if (message.Type == "reset-tcp-peers" && tcpTracker is not null)
+                        else if (message.Type == "reset-log")
                         {
-                            peerLossBaseline = session.Loss;
+                            logLossBaseline = session.Loss;
                             // The ETW session and Stopwatch both use the Windows performance counter.
-                            tcpTracker.ResetPeers(Stopwatch.GetTimestamp());
+                            var cutoff = Stopwatch.GetTimestamp();
+                            if (tcpTracker is not null) tcpTracker.ResetPeers(cutoff);
+                            else udpTracker!.ResetFlows(cutoff);
                         }
                         else throw new InvalidDataException("監視コマンドが不正です。");
                         revision = message.Revision;
@@ -186,7 +188,7 @@ internal static class TrafficMonitorHelper
         {
             var loss = session!.Loss;
             var dropped = udpTracker?.DroppedEvents ?? tcpTracker!.DroppedEvents;
-            var lostEvents = unchecked(loss.Events - peerLossBaseline.Events);
+            var lostEvents = unchecked(loss.Events - logLossBaseline.Events);
             var totalDropped = dropped > long.MaxValue - lostEvents ? long.MaxValue : dropped + lostEvents;
             TcpPeerInfo[]? peers = null;
             TcpTrafficReading? traffic = null;
@@ -197,7 +199,7 @@ internal static class TrafficMonitorHelper
             }
             return new TrafficMessage("snapshot", UdpFlows: udpTracker?.Snapshot().ToArray(),
                 TcpPeers: peers, Revision: revision, Mode: arguments.Mode,
-                DroppedEvents: totalDropped, CaptureLoss: failed || loss.Buffers != peerLossBaseline.Buffers, TcpTraffic: traffic);
+                DroppedEvents: totalDropped, CaptureLoss: failed || loss.Buffers != logLossBaseline.Buffers, TcpTraffic: traffic);
         }
 
         void SetAddresses(IReadOnlyCollection<IPAddress> addresses)

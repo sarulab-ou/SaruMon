@@ -8,31 +8,37 @@ internal static class TrafficIconsTests
 {
     public static int Run()
     {
-        DirectionColorsAndFixedBackground();
-        AnyTrafficHasSameFixedColor();
+        BarsGrowFromOppositeEdges();
+        RatesUseIntegerPixelHeights();
         CacheRemainsBounded();
         DisposedCacheCannotReturnReleasedIcons();
         return 4;
     }
 
-    private static void DirectionColorsAndFixedBackground()
+    private static void BarsGrowFromOppositeEdges()
     {
         foreach (var size in new[] { 16, 20, 24, 32 })
         {
             using var icons = new TrafficIcons(size);
             using var idle = icons.Idle.ToBitmap();
-            using var receive = icons.GetIcon(true, 1, 0).ToBitmap();
-            using var send = icons.GetIcon(true, 0, 1).ToBitmap();
+            using var receive = icons.GetIcon(true, 128 * 1024, 0).ToBitmap();
+            using var send = icons.GetIcon(true, 0, 128 * 1024).ToBitmap();
             using var offline = icons.GetIcon(false, 0, 0).ToBitmap();
             var left = size / 4;
             var right = size * 3 / 4;
-            var green = receive.GetPixel(left, left);
-            var red = send.GetPixel(right, right);
-            Assert(green.G > green.R && green.G > green.B, "Receive arrow must be green.");
-            Assert(red.R > red.G && red.R > red.B, "Send arrow must be red.");
-            Assert(idle.GetPixel(left, left).ToArgb() == Color.White.ToArgb() && idle.GetPixel(right, right).ToArgb() == Color.White.ToArgb(), "Idle arrows must be absent on a white background.");
-            Assert(receive.GetPixel(right, right).ToArgb() == Color.White.ToArgb(), "Receive traffic must not display the send arrow.");
-            Assert(send.GetPixel(left, left).ToArgb() == Color.White.ToArgb(), "Send traffic must not display the receive arrow.");
+            var height = 1 + (size - 3) / 2;
+            var green = TrafficIcons.ReceiveColor.ToArgb();
+            var red = TrafficIcons.SendColor.ToArgb();
+            var white = Color.White.ToArgb();
+            for (var row = 1; row < size - 1; row++)
+            {
+                Assert(receive.GetPixel(left, row).ToArgb() == (row <= height ? green : white), "Receive must grow from the top, one complete row at a time.");
+                Assert(send.GetPixel(right, row).ToArgb() == (row >= size - 1 - height ? red : white), "Send must grow from the bottom, one complete row at a time.");
+                Assert(receive.GetPixel(right, row).ToArgb() == white && send.GetPixel(left, row).ToArgb() == white,
+                    "A direction must leave the other half blank.");
+                Assert(idle.GetPixel(left, row).ToArgb() == white && idle.GetPixel(right, row).ToArgb() == white,
+                    "Both halves must be blank while idle.");
+            }
             foreach (var bitmap in new[] { idle, receive, send, offline })
             {
                 Assert(bitmap.Size == new Size(size, size), "An icon must be rendered at the requested size.");
@@ -43,35 +49,39 @@ internal static class TrafficIconsTests
         }
     }
 
-    private static void AnyTrafficHasSameFixedColor()
+    private static void RatesUseIntegerPixelHeights()
     {
-        using var icons = new TrafficIcons();
-        foreach (var rate in new[] { double.Epsilon, 1, 4096, 1048576, double.MaxValue })
+        const int size = 16;
+        using var icons = new TrafficIcons(size);
+        var previous = 0;
+        for (var height = 1; height <= size - 2; height++)
         {
-            Assert(ReferenceEquals(icons.GetIcon(true, rate, 0), icons.GetIcon(true, 1, 0)), "Any receive traffic must use the same visible arrow.");
-            Assert(ReferenceEquals(icons.GetIcon(true, 0, rate), icons.GetIcon(true, 0, 1)), "Any send traffic must use the same visible arrow.");
-            using var bitmap = icons.GetIcon(true, rate, rate).ToBitmap();
-            Assert(bitmap.GetPixel(8, 8).ToArgb() == TrafficIcons.ReceiveColor.ToArgb()
-                && bitmap.GetPixel(24, 24).ToArgb() == TrafficIcons.SendColor.ToArgb(), "Traffic volume must not alter direction colors.");
+            var rate = height == 1 ? double.Epsilon : 1024 * Math.Pow(2, 14 * (height - 0.5) / (size - 3));
+            var reverseHeight = size - 1 - height;
+            var upload = 1024 * Math.Pow(2, 14 * (reverseHeight - 0.5) / (size - 3));
+            using var bitmap = icons.GetIcon(true, rate, upload).ToBitmap();
+            var greenRows = Enumerable.Range(1, size - 2).Count(y => bitmap.GetPixel(4, y).ToArgb() == TrafficIcons.ReceiveColor.ToArgb());
+            var redRows = Enumerable.Range(1, size - 2).Count(y => bitmap.GetPixel(12, y).ToArgb() == TrafficIcons.SendColor.ToArgb());
+            Assert(greenRows == height && greenRows == previous + 1 && redRows == reverseHeight,
+                "Changing byte rates must update each bar independently in single-pixel steps.");
+            previous = greenRows;
         }
+        Assert(ReferenceEquals(icons.GetIcon(true, 16 * 1024 * 1024, 0), icons.GetIcon(true, double.MaxValue, 0)),
+            "Rates above full scale must saturate at the top of the lane.");
     }
 
     private static void CacheRemainsBounded()
     {
         using var icons = new TrafficIcons();
-        var all = new HashSet<Icon>(ReferenceEqualityComparer.Instance);
-        foreach (var receive in new[] { 0d, double.Epsilon, 1, double.MaxValue })
-            foreach (var send in new[] { 0d, double.Epsilon, 1, double.MaxValue })
-                all.Add(icons.GetIcon(true, receive, send));
-        all.Add(icons.GetIcon(false, 0, 0));
-        Assert(all.Count == TrafficIcons.MaximumCachedIcons && icons.CachedIconCount == all.Count,
-            "The cache must contain exactly the finite direction combinations and offline icon.");
+        Assert(ReferenceEquals(icons.GetIcon(true, 1, 2), icons.GetIcon(true, 4, 8)),
+            "Rates that produce the same pixel heights must reuse the same icon.");
         Assert(ReferenceEquals(icons.Idle, icons.GetIcon(true, double.NaN, -1)), "Invalid rates must reuse the cached idle icon.");
         Assert(ReferenceEquals(icons.Idle, icons.GetIcon(true, double.PositiveInfinity, double.NegativeInfinity)), "Non-finite rates must not create activity.");
         Assert(ReferenceEquals(icons.GetIcon(false, 0, 0), icons.GetIcon(false, double.MaxValue, double.MaxValue)), "Offline must reuse one cached icon.");
-        for (var index = 0; index < 4000; index++)
-            Assert(all.Contains(icons.GetIcon(true, index * 17323.5, index * 117.75)), "Changing rates allocated an uncached native icon.");
-        Assert(icons.CachedIconCount == TrafficIcons.MaximumCachedIcons, "Polling expanded the icon cache.");
+        for (var i = 0; i <= 14; i++)
+            for (var j = 0; j <= 14; j++)
+                icons.GetIcon(true, 1024 * Math.Pow(2, i), 1024 * Math.Pow(2, j));
+        Assert(icons.CachedIconCount == TrafficIcons.MaximumCachedIcons, "Many combinations must reuse bounded cache storage.");
     }
 
     private static void DisposedCacheCannotReturnReleasedIcons()
@@ -93,13 +103,13 @@ internal static class TrafficIconsTests
         using var titleFont = new Font("Segoe UI", 12, FontStyle.Bold);
         using var ink = new SolidBrush(Color.FromArgb(35, 45, 60));
         using var dark = new SolidBrush(Color.FromArgb(32, 34, 39));
-        graphics.DrawString("SaruMon notification icons", titleFont, ink, 20, 14);
+        graphics.DrawString("SaruMon · Receive ↓ / Send ↑", titleFont, ink, 20, 14);
         (string Label, bool Available, double Receive, double Send)[] samples =
         [
             ("Idle", true, 0, 0),
-            ("Down only", true, 1, 0),
-            ("Up only", true, 0, 1),
-            ("Down + Up", true, 1, 1),
+            ("Receive · 1 pixel", true, 1024, 0),
+            ("Send · 128 KiB/s", true, 0, 128 * 1024),
+            ("Receive + send", true, 2 * 1024 * 1024, 64 * 1024),
             ("Offline", false, 0, 0)
         ];
         for (var index = 0; index < samples.Length; index++)

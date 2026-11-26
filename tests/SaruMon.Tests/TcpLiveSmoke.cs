@@ -65,7 +65,7 @@ internal static class TcpLiveSmoke
 
             var overviewBefore = monitor.TcpTraffic ?? throw new InvalidOperationException("Missing TCP overview.");
             foreach (var group in groups) await group.SendTailAsync(40, timeout.Token);
-            await monitor.ResetTcpPeersAsync(timeout.Token);
+            await monitor.ResetLogAsync(timeout.Token);
             if (!monitor.IsRunning || groups.Any(group => monitor.TcpSnapshot.Any(item => item.RemoteAddress == group.RemoteAddress.ToString()))
                 || monitor.TcpTraffic?.Revision != overviewBefore.Revision)
                 throw new InvalidOperationException("Active reset stopped monitoring, restored old rows, or changed the overview baseline.");
@@ -100,7 +100,7 @@ internal static class TcpLiveSmoke
                 throw new InvalidOperationException("TCP capture was partial: " + monitor.Error);
             if (monitor.TcpTraffic?.Reading is not { SentBytes: 0, ReceivedBytes: 0, Incomplete: false })
                 throw new InvalidOperationException("Loopback TCP must stay out of the interface overview.");
-            await monitor.ResetTcpPeersAsync(timeout.Token);
+            await monitor.ResetLogAsync(timeout.Token);
             if (monitor.IsRunning || monitor.TcpSnapshot.Count != 0 || monitor.DroppedEvents != 0)
                 throw new InvalidOperationException("Resetting a stopped log must clear its retained rows without starting capture.");
             Console.WriteLine("PASS: live and stopped peer log reset, pre-reset events excluded, overview revision retained.");

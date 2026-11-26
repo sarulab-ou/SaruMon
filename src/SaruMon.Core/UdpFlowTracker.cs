@@ -32,6 +32,7 @@ public sealed class UdpFlowTracker
     private HashSet<AddressKey> localAddresses = new();
     private DateTimeOffset lastClock;
     private long droppedEvents;
+    private long logCutoffTimestamp;
 
     public UdpFlowTracker(int maxFlows = 2048, Func<DateTimeOffset>? clock = null)
     {
@@ -54,11 +55,26 @@ public sealed class UdpFlowTracker
         {
             if (localAddresses.SetEquals(selected)) return;
             localAddresses = selected;
-            flows.Clear();
-            recency.Clear();
-            lastClock = default;
-            droppedEvents = 0;
+            ClearFlows();
         }
+    }
+
+    /// <summary>Clears the log and rejects buffered datagrams from before the reset.</summary>
+    public void ResetFlows(long cutoffTimestamp)
+    {
+        lock (gate)
+        {
+            logCutoffTimestamp = cutoffTimestamp;
+            ClearFlows();
+        }
+    }
+
+    private void ClearFlows()
+    {
+        flows.Clear();
+        recency.Clear();
+        lastClock = default;
+        droppedEvents = 0;
     }
 
     /// <summary>
@@ -66,7 +82,7 @@ public sealed class UdpFlowTracker
     /// addresses are ignored so malformed capture events cannot stop observation.
     /// Ports must be 1..65535; a zero-byte datagram still increments its packet counter.
     /// </summary>
-    public void Record(IPAddress local, int localPort, IPAddress remote, int remotePort, int bytes)
+    public void Record(IPAddress local, int localPort, IPAddress remote, int remotePort, int bytes, long timestamp = long.MaxValue)
     {
         if (localPort is < 1 or > 65535 || remotePort is < 1 or > 65535 || bytes < 0 ||
             !TryNormalize(local, out var localKey) || !TryNormalize(remote, out var remoteKey) ||
@@ -75,7 +91,7 @@ public sealed class UdpFlowTracker
 
         lock (gate)
         {
-            if (!localAddresses.Contains(localKey)) return;
+            if (timestamp < logCutoffTimestamp || !localAddresses.Contains(localKey)) return;
             var key = new FlowKey(localKey, localPort, remoteKey, remotePort);
             if (flows.TryGetValue(key, out var existing))
             {

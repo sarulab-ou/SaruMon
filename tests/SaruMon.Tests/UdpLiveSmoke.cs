@@ -29,6 +29,21 @@ internal static class UdpLiveSmoke
                 if (flow.FirstSeen == default || flow.LastSeen < flow.FirstSeen || flow.Bytes < 3 * DatagramPair.PayloadSize)
                     throw new InvalidOperationException("Invalid observed count or first/last timestamp.");
 
+            foreach (var pair in endpoints) await pair.SendAsync(1, timeout.Token);
+            await monitor.ResetLogAsync(timeout.Token);
+            if (!monitor.IsRunning || endpoints.Any(pair => Find(monitor.UdpSnapshot, pair) is not null))
+                throw new InvalidOperationException("UDP reset stopped monitoring or restored pre-reset datagrams.");
+
+            foreach (var pair in endpoints) await pair.SendAsync(2, timeout.Token);
+            await WaitForPacketsAsync(2);
+            var fresh = endpoints.Select(pair => Find(monitor.UdpSnapshot, pair)!).ToArray();
+            for (var index = 0; index < endpoints.Count; index++)
+            {
+                var flow = fresh[index];
+                if (flow.Packets != 2 || flow.Bytes != 2 * DatagramPair.PayloadSize || flow.FirstSeen <= before[index].LastSeen)
+                    throw new InvalidOperationException("UDP reset did not start new counts and timestamps.");
+            }
+
             // Stop immediately after another datagram. The final snapshot must include the flushed ETW event.
             foreach (var pair in endpoints) await pair.SendAsync(1, timeout.Token);
             await monitor.StopAsync();
@@ -37,13 +52,16 @@ internal static class UdpLiveSmoke
             {
                 var retained = Find(monitor.UdpSnapshot, endpoints[index])
                     ?? throw new InvalidOperationException("Stopping erased the observed rows.");
-                if (retained.Packets < 4 || retained.Bytes < 4 * DatagramPair.PayloadSize || retained.FirstSeen != before[index].FirstSeen)
+                if (retained.Packets != 3 || retained.Bytes != 3 * DatagramPair.PayloadSize || retained.FirstSeen != fresh[index].FirstSeen)
                     throw new InvalidOperationException("The final snapshot lost counts or changed FirstSeen.");
                 Console.WriteLine($"UDP {endpoints[index].Address.AddressFamily}: packets={retained.Packets}, bytes={retained.Bytes}, first={retained.FirstSeen:O}, last={retained.LastSeen:O}");
             }
             if (monitor.Error is not null || monitor.DroppedEvents != 0)
                 throw new InvalidOperationException("Capture was partial: " + monitor.Error);
-            Console.WriteLine("PASS: UDP loopback observation, cumulative counts, first-seen time, final snapshot, and helper exit.");
+            await monitor.ResetLogAsync(timeout.Token);
+            if (monitor.IsRunning || monitor.UdpSnapshot.Count != 0 || monitor.DroppedEvents != 0)
+                throw new InvalidOperationException("Reset must clear the stopped UDP log without starting observation.");
+            Console.WriteLine("PASS: UDP loopback observation, live and stopped reset, final snapshot, and helper exit.");
             return 0;
 
             async Task WaitForPacketsAsync(long minimum)

@@ -27,7 +27,7 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
     private bool disposed;
     private long revision;
     private long tcpTrafficRevision;
-    private TaskCompletionSource? peerResetCompletion;
+    private TaskCompletionSource? logResetCompletion;
     private long droppedEvents;
     private string? beforeStopFailure;
 
@@ -131,9 +131,8 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
         finally { gate.Release(); }
     }
 
-    public async Task ResetTcpPeersAsync(CancellationToken token)
+    public async Task ResetLogAsync(CancellationToken token)
     {
-        if (mode != MonitoringMode.Tcp) throw new InvalidOperationException("TCP の相手別ログだけをリセットできます。");
         await gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
@@ -144,24 +143,25 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
             lock (snapshotGate)
             {
                 nextRevision = ++revision;
-                Volatile.Write(ref tcpSnapshot, Array.Empty<TcpPeerInfo>());
+                if (mode == MonitoringMode.Udp) Volatile.Write(ref udpSnapshot, Array.Empty<UdpFlowInfo>());
+                else Volatile.Write(ref tcpSnapshot, Array.Empty<TcpPeerInfo>());
                 Interlocked.Exchange(ref droppedEvents, 0);
                 Volatile.Write(ref error, null);
                 // The overview keeps its revision and baseline. Only the log is reset.
                 completion = running && activeChannel is not null
                     ? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) : null;
-                peerResetCompletion = completion;
+                logResetCompletion = completion;
             }
             if (completion is null) return;
 
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
             timeout.CancelAfter(TimeSpan.FromSeconds(3));
-            await activeChannel!.WriteAsync(new TrafficMessage("reset-tcp-peers", Revision: nextRevision, Mode: mode), timeout.Token).ConfigureAwait(false);
+            await activeChannel!.WriteAsync(new TrafficMessage("reset-log", Revision: nextRevision, Mode: mode), timeout.Token).ConfigureAwait(false);
             await completion.Task.WaitAsync(timeout.Token).ConfigureAwait(false);
         }
         finally
         {
-            lock (snapshotGate) peerResetCompletion = null;
+            lock (snapshotGate) logResetCompletion = null;
             gate.Release();
         }
     }
@@ -192,7 +192,7 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
                     Interlocked.Exchange(ref droppedEvents, message.DroppedEvents);
                     Volatile.Write(ref error, message.DroppedEvents > 0 || message.CaptureLoss
                         ? "記録上限またはイベント欠落のため、一部の通信を記録できませんでした。表示・保存は観測できた範囲です。" : null);
-                    peerResetCompletion?.TrySetResult();
+                    logResetCompletion?.TrySetResult();
                 }
                 if (message.Final) break;
             }
@@ -205,7 +205,7 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
         finally
         {
             Volatile.Write(ref running, false);
-            lock (snapshotGate) peerResetCompletion?.TrySetCanceled();
+            lock (snapshotGate) logResetCompletion?.TrySetCanceled();
             // Closing the pipe is also the helper's independent stop signal.
             pipe?.Dispose();
         }

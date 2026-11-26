@@ -28,7 +28,33 @@ internal static class UdpFlowTests
         ConcurrentEventsDoNotLoseCounts();
         SnapshotsAreIndependent();
         BackwardClockKeepsTimestampOrder();
-        return 15;
+        ResetRejectsBufferedDatagramsAndReleasesCapacity();
+        return 16;
+    }
+
+    private static void ResetRejectsBufferedDatagramsAndReleasesCapacity()
+    {
+        var now = Epoch;
+        var tracker = new UdpFlowTracker(maxFlows: 1, clock: () => now);
+        tracker.SetLocalAddresses([Local]);
+        tracker.Record(Local, 5000, Remote, 53, 100, timestamp: 10);
+        tracker.Record(Local, 5001, Remote, 53, 200, timestamp: 11);
+        Assert(tracker.DroppedEvents == 1, "The fixture must exhaust log capacity.");
+
+        tracker.ResetFlows(cutoffTimestamp: 20);
+        tracker.Record(Local, 5000, Remote, 53, 300, timestamp: 19);
+        Assert(tracker.Snapshot().Count == 0 && tracker.DroppedEvents == 0,
+            "A buffered pre-reset datagram must not restore a row or consume capacity.");
+
+        now = now.AddSeconds(1);
+        tracker.Record(Local, 5001, Remote, 53, 40, timestamp: 20);
+        var first = now;
+        now = now.AddSeconds(1);
+        tracker.Record(Local, 5001, Remote, 53, 60, timestamp: 21);
+        var fresh = tracker.Snapshot().Single();
+        Assert(fresh.LocalPort == 5001 && fresh.Packets == 2 && fresh.Bytes == 100
+            && fresh.FirstSeen == first && fresh.LastSeen == now && tracker.DroppedEvents == 0,
+            "Post-reset sends must start new counts and observation times for the same selection.");
     }
 
     private static void FiltersAndAccumulatesSelectedAddress()

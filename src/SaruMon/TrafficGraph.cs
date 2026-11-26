@@ -4,6 +4,7 @@ namespace SaruMon;
 
 internal sealed class TrafficGraph : Control
 {
+    private const int HistorySeconds = 60;
     private readonly Queue<(double Down, double Up)> samples = new();
     public TrafficGraph()
     {
@@ -16,7 +17,7 @@ internal sealed class TrafficGraph : Control
     public void Add(double down, double up)
     {
         samples.Enqueue((down, up));
-        while (samples.Count > 120) samples.Dequeue();
+        while (samples.Count > HistorySeconds + 1) samples.Dequeue();
         Invalidate();
     }
 
@@ -46,7 +47,7 @@ internal sealed class TrafficGraph : Control
         void Draw(Color color, Func<(double Down, double Up), double> select)
         {
             using var pen = new Pen(color, 2);
-            var points = data.Select((x, i) => new PointF(area.Right - (data.Length - 1 - i) * area.Width / 119,
+            var points = data.Select((x, i) => new PointF(area.Right - (data.Length - 1 - i) * area.Width / HistorySeconds,
                 area.Bottom - (float)(select(x) / ceiling) * area.Height)).ToArray();
             g.DrawLines(pen, points);
         }

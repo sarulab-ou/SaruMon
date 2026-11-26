@@ -328,7 +328,7 @@ internal sealed class TcpPeerView : UserControl
         {
             await operations.WaitAsync(lifetime.Token);
             acquired = true;
-            await client.ResetTcpPeersAsync(lifetime.Token);
+            await client.ResetLogAsync(lifetime.Token);
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
         catch (Exception ex)
