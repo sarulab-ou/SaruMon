@@ -4,14 +4,14 @@
 
 ## 配布形式
 
-タグは `vMAJOR.MINOR.PATCH`（例: `v0.1.8`）とし、プロジェクトの `Version` と一致させます。v0.1.8 の配布ファイルは次の構成です。
+タグは `vMAJOR.MINOR.PATCH`（例: `v0.1.9`）とし、プロジェクトの `Version` と一致させます。v0.1.9 の配布ファイルは次の構成です。
 
 | ファイル | 用途 |
 | --- | --- |
-| `SaruMon-0.1.8-Setup-x64.exe` | NSIS によるユーザー単位のインストーラー |
+| `SaruMon-0.1.9-Setup-x64.exe` | NSIS によるユーザー単位のインストーラー |
 | `SaruMon-win-x64.zip` | ポータブル版・既存アプリからの更新用 |
 | `SaruMon-win-x64.zip.sha256` | アプリ内更新で照合する ZIP の SHA-256 |
-| `SaruMon-0.1.8-SHA256SUMS.txt` | インストーラー EXE の SHA-256 |
+| `SaruMon-0.1.9-SHA256SUMS.txt` | インストーラー EXE の SHA-256 |
 
 これらを同じ GitHub Release に配置します。ZIP 直下には自己完結型の単一ファイル `SaruMon.exe` を入れます。既存の v0.1.0 も更新用 ZIP と `.sha256` を参照するため、インストーラーを追加してもこの 2 ファイルの名前と形式は変更しません。
 

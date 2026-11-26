@@ -29,7 +29,35 @@ internal static class TcpPeerTests
         ConnectionsUpdateFirstAndLastTimes();
         ConnectionsUseSelectionNormalizationAndCapacity();
         OverviewCountsSelectedExternalTrafficBeyondPeerCapacity();
-        return 16;
+        ResetStartsFreshPeerLogWithoutChangingOverview();
+        return 17;
+    }
+
+    private static void ResetStartsFreshPeerLogWithoutChangingOverview()
+    {
+        var now = Epoch;
+        var tracker = new TcpPeerTracker(maxPeers: 1, clock: () => now);
+        var other = IPAddress.Parse("198.51.100.21");
+        tracker.SetLocalAddresses([Local]);
+        tracker.RecordConnection(Local, Remote, timestamp: 10);
+        tracker.Record(true, Local, Remote, 100, timestamp: 11);
+        tracker.Record(true, Local, other, 30, timestamp: 12);
+        Assert(tracker.DroppedEvents == 1, "The fixture must have filled the peer list.");
+
+        tracker.ResetPeers(cutoffTimestamp: 20);
+        tracker.RecordConnection(Local, Remote, timestamp: 18);
+        tracker.Record(false, Local, Remote, 50, timestamp: 19);
+        var peers = tracker.Snapshot(out var received, out var sent);
+        Assert(peers.Count == 0 && tracker.DroppedEvents == 0 && sent == 130 && received == 50,
+            "Reset must discard buffered rows and free capacity while retaining overview counters.");
+
+        now = now.AddSeconds(1);
+        tracker.Record(false, Local, other, 25, timestamp: 20);
+        var fresh = tracker.Snapshot(out received, out sent).Single();
+        Assert(fresh.RemoteAddress == other.ToString() && fresh.FirstSeen == now && fresh.LastSeen == now
+            && fresh.ReceivedBytes == 25 && fresh.SentBytes == 0 && fresh.ConnectionCount == 0
+            && sent == 130 && received == 75,
+            "Traffic after reset must use a new row and new timestamps without changing the overview baseline.");
     }
 
     private static void OverviewCountsSelectedExternalTrafficBeyondPeerCapacity()

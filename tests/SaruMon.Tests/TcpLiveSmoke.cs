@@ -63,6 +63,24 @@ internal static class TcpLiveSmoke
                     throw new InvalidOperationException("TCP connection/data events did not preserve first time and advance last time.");
             }
 
+            var overviewBefore = monitor.TcpTraffic ?? throw new InvalidOperationException("Missing TCP overview.");
+            foreach (var group in groups) await group.SendTailAsync(40, timeout.Token);
+            await monitor.ResetTcpPeersAsync(timeout.Token);
+            if (!monitor.IsRunning || groups.Any(group => monitor.TcpSnapshot.Any(item => item.RemoteAddress == group.RemoteAddress.ToString()))
+                || monitor.TcpTraffic?.Revision != overviewBefore.Revision)
+                throw new InvalidOperationException("Active reset stopped monitoring, restored old rows, or changed the overview baseline.");
+            foreach (var group in groups) await group.ExchangeAsync(24, 32, timeout.Token);
+            await WaitForTotalsAsync(96, 128, 0);
+            before = groups.Select(group => Find(group)).ToArray();
+            for (var index = 0; index < groups.Count; index++)
+            {
+                var peer = before[index];
+                var both = groups[index].BothEndsSelected;
+                if (peer.SentBytes != (both ? 224 : 96) || peer.ReceivedBytes != (both ? 224 : 128)
+                    || peer.ConnectionCount != 0 || peer.FirstSeen <= baseline[index].FirstSeen)
+                    throw new InvalidOperationException("The reset log included pre-reset data, connections, or timestamps.");
+            }
+
             // Receive application data first, then stop immediately, requiring the final ETW buffer drain.
             foreach (var group in groups) await group.SendTailAsync(80, timeout.Token);
             await monitor.StopAsync();
@@ -82,6 +100,10 @@ internal static class TcpLiveSmoke
                 throw new InvalidOperationException("TCP capture was partial: " + monitor.Error);
             if (monitor.TcpTraffic?.Reading is not { SentBytes: 0, ReceivedBytes: 0, Incomplete: false })
                 throw new InvalidOperationException("Loopback TCP must stay out of the interface overview.");
+            await monitor.ResetTcpPeersAsync(timeout.Token);
+            if (monitor.IsRunning || monitor.TcpSnapshot.Count != 0 || monitor.DroppedEvents != 0)
+                throw new InvalidOperationException("Resetting a stopped log must clear its retained rows without starting capture.");
+            Console.WriteLine("PASS: live and stopped peer log reset, pre-reset events excluded, overview revision retained.");
             Console.WriteLine("PASS: TCP peer aggregation, bidirectional bytes, observed connection counts, refused/previous connections excluded, first/last times, final snapshot, and helper exit.");
             return 0;
 

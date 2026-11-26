@@ -36,6 +36,7 @@ internal static class TrafficMonitorHelper
         var trafficClock = new Stopwatch();
         var stateGate = new object();
         long revision = 0;
+        (uint Events, uint Buffers) peerLossBaseline = default;
         try
         {
             using var parent = Process.GetProcessById(arguments.ParentId);
@@ -69,19 +70,19 @@ internal static class TrafficMonitorHelper
             }
             if (tcpTracker is not null)
             {
-                source.Kernel.TcpIpSend += data => tcpTracker.Record(true, data.saddr, data.daddr, data.size);
-                source.Kernel.TcpIpSendIPV6 += data => tcpTracker.Record(true, data.saddr, data.daddr, data.size);
+                source.Kernel.TcpIpSend += data => tcpTracker.Record(true, data.saddr, data.daddr, data.size, CaptureTimestamp(data));
+                source.Kernel.TcpIpSendIPV6 += data => tcpTracker.Record(true, data.saddr, data.daddr, data.size, CaptureTimestamp(data));
                 // Kernel TCP events use socket orientation in BOTH directions:
                 // saddr is local, daddr is remote, including Recv. See PerfView's
                 // kerneltraceeventparser.mof TcpIp_TypeGroup1/3 descriptions.
-                source.Kernel.TcpIpRecv += data => tcpTracker.Record(false, data.saddr, data.daddr, data.size);
-                source.Kernel.TcpIpRecvIPV6 += data => tcpTracker.Record(false, data.saddr, data.daddr, data.size);
+                source.Kernel.TcpIpRecv += data => tcpTracker.Record(false, data.saddr, data.daddr, data.size, CaptureTimestamp(data));
+                source.Kernel.TcpIpRecvIPV6 += data => tcpTracker.Record(false, data.saddr, data.daddr, data.size, CaptureTimestamp(data));
                 // Count observed Connect/Accept events, never data packets or retries.
                 // TypeGroup2/4 use the same local/remote socket orientation.
-                source.Kernel.TcpIpConnect += data => tcpTracker.RecordConnection(data.saddr, data.daddr);
-                source.Kernel.TcpIpConnectIPV6 += data => tcpTracker.RecordConnection(data.saddr, data.daddr);
-                source.Kernel.TcpIpAccept += data => tcpTracker.RecordConnection(data.saddr, data.daddr);
-                source.Kernel.TcpIpAcceptIPV6 += data => tcpTracker.RecordConnection(data.saddr, data.daddr);
+                source.Kernel.TcpIpConnect += data => tcpTracker.RecordConnection(data.saddr, data.daddr, CaptureTimestamp(data));
+                source.Kernel.TcpIpConnectIPV6 += data => tcpTracker.RecordConnection(data.saddr, data.daddr, CaptureTimestamp(data));
+                source.Kernel.TcpIpAccept += data => tcpTracker.RecordConnection(data.saddr, data.daddr, CaptureTimestamp(data));
+                source.Kernel.TcpIpAcceptIPV6 += data => tcpTracker.RecordConnection(data.saddr, data.daddr, CaptureTimestamp(data));
             }
             consumer = Task.Run(() => source.Process(), CancellationToken.None);
             await channel.WriteAsync(new TrafficMessage("ready", Revision: revision, Mode: arguments.Mode), handshake.Token).ConfigureAwait(false);
@@ -102,14 +103,23 @@ internal static class TrafficMonitorHelper
                     if (message is null) return;
                     if (message.Mode != arguments.Mode) throw new InvalidDataException("監視対象の種類が一致しません。");
                     if (message.Type == "stop") return;
-                    if (message.Type != "configure") throw new InvalidDataException("監視コマンドが不正です。");
-                    var updated = TrafficWireProtocol.ParseAddresses(message.Addresses);
                     lock (stateGate)
                     {
                         if (message.Revision <= revision) throw new InvalidDataException("監視設定の順序が不正です。");
-                        // Even adapters sharing an address set must start a fresh observation window.
-                        SetAddresses(Array.Empty<IPAddress>());
-                        SetAddresses(updated);
+                        if (message.Type == "configure")
+                        {
+                            var updated = TrafficWireProtocol.ParseAddresses(message.Addresses);
+                            // Even adapters sharing an address set must start a fresh observation window.
+                            SetAddresses(Array.Empty<IPAddress>());
+                            SetAddresses(updated);
+                        }
+                        else if (message.Type == "reset-tcp-peers" && tcpTracker is not null)
+                        {
+                            peerLossBaseline = session.Loss;
+                            // The ETW session and Stopwatch both use the Windows performance counter.
+                            tcpTracker.ResetPeers(Stopwatch.GetTimestamp());
+                        }
+                        else throw new InvalidDataException("監視コマンドが不正です。");
                         revision = message.Revision;
                     }
                 }
@@ -160,7 +170,7 @@ internal static class TrafficMonitorHelper
                 try
                 {
                     TrafficMessage final;
-                    lock (stateGate) final = CreateSnapshot() with { Final = true, CaptureLoss = exitCode != 0 || session.Loss.Buffers > 0 };
+                    lock (stateGate) final = CreateSnapshot(failed: exitCode != 0) with { Final = true };
                     await channel.WriteAsync(final, timeout.Token).ConfigureAwait(false);
                 }
                 catch (Exception) { }
@@ -172,21 +182,22 @@ internal static class TrafficMonitorHelper
         }
         return exitCode;
 
-        TrafficMessage CreateSnapshot()
+        TrafficMessage CreateSnapshot(bool failed = false)
         {
             var loss = session!.Loss;
             var dropped = udpTracker?.DroppedEvents ?? tcpTracker!.DroppedEvents;
-            var totalDropped = dropped > long.MaxValue - loss.Events ? long.MaxValue : dropped + loss.Events;
+            var lostEvents = unchecked(loss.Events - peerLossBaseline.Events);
+            var totalDropped = dropped > long.MaxValue - lostEvents ? long.MaxValue : dropped + lostEvents;
             TcpPeerInfo[]? peers = null;
             TcpTrafficReading? traffic = null;
             if (tcpTracker is not null)
             {
                 peers = tcpTracker.Snapshot(out var received, out var sent).ToArray();
-                traffic = new TcpTrafficReading(received, sent, trafficClock.Elapsed.Ticks, loss.Events > 0 || loss.Buffers > 0);
+                traffic = new TcpTrafficReading(received, sent, trafficClock.Elapsed.Ticks, failed || loss.Events > 0 || loss.Buffers > 0);
             }
             return new TrafficMessage("snapshot", UdpFlows: udpTracker?.Snapshot().ToArray(),
                 TcpPeers: peers, Revision: revision, Mode: arguments.Mode,
-                DroppedEvents: totalDropped, CaptureLoss: loss.Buffers > 0, TcpTraffic: traffic);
+                DroppedEvents: totalDropped, CaptureLoss: failed || loss.Buffers != peerLossBaseline.Buffers, TcpTraffic: traffic);
         }
 
         void SetAddresses(IReadOnlyCollection<IPAddress> addresses)
@@ -210,6 +221,14 @@ internal static class TrafficMonitorHelper
             }
             catch (NetworkInformationException) { /* Retain the last available host address set. */ }
         }
+    }
+
+    private static long CaptureTimestamp(TraceEvent data)
+    {
+        // The reset boundary is a raw QPC value. A session-relative time cannot be compared to it.
+#pragma warning disable CS0618
+        return data.TimeStampQPC;
+#pragma warning restore CS0618
     }
 
     private static async Task ObserveAsync(Task? task)

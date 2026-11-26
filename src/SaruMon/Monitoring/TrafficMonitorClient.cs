@@ -26,6 +26,8 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
     private bool running;
     private bool disposed;
     private long revision;
+    private long tcpTrafficRevision;
+    private TaskCompletionSource? peerResetCompletion;
     private long droppedEvents;
     private string? beforeStopFailure;
 
@@ -82,7 +84,7 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
             var hello = await channel.ReadAsync(timeout.Token).ConfigureAwait(false);
             if (hello?.Type != "hello" || hello.Nonce != nonce || hello.Mode != mode) throw new InvalidDataException("通信監視の認証に失敗しました。");
             long nextRevision;
-            lock (snapshotGate) nextRevision = ++revision;
+            lock (snapshotGate) nextRevision = tcpTrafficRevision = ++revision;
             await channel.WriteAsync(new TrafficMessage("configure", nonce,
                 normalized.Select(address => address.ToString()).ToArray(), Revision: nextRevision, Mode: mode), timeout.Token).ConfigureAwait(false);
             var ready = await channel.ReadAsync(timeout.Token).ConfigureAwait(false);
@@ -110,7 +112,7 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
             long nextRevision;
             lock (snapshotGate)
             {
-                nextRevision = ++revision;
+                nextRevision = tcpTrafficRevision = ++revision;
                 ClearSnapshots();
                 Interlocked.Exchange(ref droppedEvents, 0);
             }
@@ -127,6 +129,41 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
             throw new InvalidOperationException(Error, exception);
         }
         finally { gate.Release(); }
+    }
+
+    public async Task ResetTcpPeersAsync(CancellationToken token)
+    {
+        if (mode != MonitoringMode.Tcp) throw new InvalidOperationException("TCP の相手別ログだけをリセットできます。");
+        await gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            var activeChannel = channel;
+            TaskCompletionSource? completion;
+            long nextRevision;
+            lock (snapshotGate)
+            {
+                nextRevision = ++revision;
+                Volatile.Write(ref tcpSnapshot, Array.Empty<TcpPeerInfo>());
+                Interlocked.Exchange(ref droppedEvents, 0);
+                Volatile.Write(ref error, null);
+                // The overview keeps its revision and baseline. Only the log is reset.
+                completion = running && activeChannel is not null
+                    ? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) : null;
+                peerResetCompletion = completion;
+            }
+            if (completion is null) return;
+
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+            timeout.CancelAfter(TimeSpan.FromSeconds(3));
+            await activeChannel!.WriteAsync(new TrafficMessage("reset-tcp-peers", Revision: nextRevision, Mode: mode), timeout.Token).ConfigureAwait(false);
+            await completion.Task.WaitAsync(timeout.Token).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (snapshotGate) peerResetCompletion = null;
+            gate.Release();
+        }
     }
 
     private async Task ReadSnapshotsAsync(TrafficChannel activeChannel, CancellationToken token)
@@ -150,11 +187,12 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
                         Volatile.Write(ref tcpSnapshot, Array.AsReadOnly(message.TcpPeers!));
                         var reading = message.TcpTraffic!;
                         if (message.CaptureLoss) reading = reading with { Incomplete = true };
-                        Volatile.Write(ref tcpTraffic, new TcpTrafficSnapshot(message.Revision, reading));
+                        Volatile.Write(ref tcpTraffic, new TcpTrafficSnapshot(tcpTrafficRevision, reading));
                     }
                     Interlocked.Exchange(ref droppedEvents, message.DroppedEvents);
                     Volatile.Write(ref error, message.DroppedEvents > 0 || message.CaptureLoss
                         ? "記録上限またはイベント欠落のため、一部の通信を記録できませんでした。表示・保存は観測できた範囲です。" : null);
+                    peerResetCompletion?.TrySetResult();
                 }
                 if (message.Final) break;
             }
@@ -167,6 +205,7 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
         finally
         {
             Volatile.Write(ref running, false);
+            lock (snapshotGate) peerResetCompletion?.TrySetCanceled();
             // Closing the pipe is also the helper's independent stop signal.
             pipe?.Dispose();
         }

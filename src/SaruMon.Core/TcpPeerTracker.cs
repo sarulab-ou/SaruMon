@@ -29,6 +29,7 @@ public sealed class TcpPeerTracker
     private HashSet<AddressKey> hostAddresses = new();
     private DateTimeOffset lastClock;
     private long droppedEvents;
+    private long peerCutoffTimestamp;
     private long receivedBytes;
     private long sentBytes;
 
@@ -52,13 +53,28 @@ public sealed class TcpPeerTracker
         {
             if (localAddresses.SetEquals(selected)) return;
             localAddresses = selected;
-            peers.Clear();
-            recency.Clear();
-            lastClock = default;
-            droppedEvents = 0;
+            ClearPeers();
             receivedBytes = 0;
             sentBytes = 0;
         }
+    }
+
+    /// <summary>Clears the peer log and rejects buffered events from before the reset.</summary>
+    public void ResetPeers(long cutoffTimestamp)
+    {
+        lock (gate)
+        {
+            peerCutoffTimestamp = cutoffTimestamp;
+            ClearPeers();
+        }
+    }
+
+    private void ClearPeers()
+    {
+        peers.Clear();
+        recency.Clear();
+        lastClock = default;
+        droppedEvents = 0;
     }
 
     /// <summary>Addresses belonging to this PC are excluded from the interface totals.</summary>
@@ -75,18 +91,18 @@ public sealed class TcpPeerTracker
     /// local/remote orientation for both send and receive; ports intentionally do
     /// not form part of the key. Invalid input is ignored without affecting totals.
     /// </summary>
-    public void Record(bool isSend, IPAddress local, IPAddress remote, int bytes) =>
-        RecordEvent(isSend, local, remote, bytes);
+    public void Record(bool isSend, IPAddress local, IPAddress remote, int bytes, long timestamp = long.MaxValue) =>
+        RecordEvent(isSend, local, remote, bytes, timestamp);
 
     /// <summary>
     /// Records one observed connect/accept event. Data events never
     /// imply a new connection, so connections established before monitoring are
     /// not guessed from traffic. The local/remote orientation matches Record.
     /// </summary>
-    public void RecordConnection(IPAddress local, IPAddress remote) =>
-        RecordEvent(null, local, remote, 0);
+    public void RecordConnection(IPAddress local, IPAddress remote, long timestamp = long.MaxValue) =>
+        RecordEvent(null, local, remote, 0, timestamp);
 
-    private void RecordEvent(bool? isSend, IPAddress local, IPAddress remote, int bytes)
+    private void RecordEvent(bool? isSend, IPAddress local, IPAddress remote, int bytes, long timestamp)
     {
         if (bytes < 0 || !TryNormalize(local, out var localKey) || !TryNormalize(remote, out var remoteKey)
             || !localKey.IsUnicast || !remoteKey.IsUnicast || localKey.IsIpv4 != remoteKey.IsIpv4)
@@ -101,6 +117,7 @@ public sealed class TcpPeerTracker
                 if (sending) sentBytes = SaturatingAdd(sentBytes, bytes);
                 else receivedBytes = SaturatingAdd(receivedBytes, bytes);
             }
+            if (timestamp < peerCutoffTimestamp) return;
             if (peers.TryGetValue(remoteKey, out var existing))
             {
                 existing.Observe(isSend, bytes, ReadClock());

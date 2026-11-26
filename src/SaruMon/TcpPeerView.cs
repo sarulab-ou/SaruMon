@@ -12,6 +12,7 @@ internal sealed class TcpPeerView : UserControl
     private readonly Button start = new() { Text = "開始（管理者権限）", AutoSize = true };
     private readonly Button stop = new() { Text = "停止", AutoSize = true, Enabled = false };
     private readonly Button save = new() { Text = "ログを保存…", AutoSize = true, Enabled = false };
+    private readonly Button reset = new() { Text = "リセット", AutoSize = true, Enabled = false, AccessibleName = "相手別 TCP ログをリセット" };
     private readonly CheckBox reverse = new() { Text = "逆引き（ホスト名を表示）", AutoSize = true, Anchor = AnchorStyles.Left };
     private readonly Label status = new() { AutoSize = true, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
     private readonly DataGridView grid = new()
@@ -38,6 +39,7 @@ internal sealed class TcpPeerView : UserControl
     private bool disposed;
     private bool resourcesDisposed;
     private bool saving;
+    private bool resetting;
     private Task? saveTask;
     private Task? shutdownTask;
     private string? operationError;
@@ -58,9 +60,10 @@ internal sealed class TcpPeerView : UserControl
         var toolbar = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty };
         start.Margin = new Padding(0, 0, 8, 0);
         stop.Margin = new Padding(0, 0, 8, 0);
-        save.Margin = new Padding(0, 0, 18, 0);
+        save.Margin = new Padding(0, 0, 8, 0);
+        reset.Margin = new Padding(0, 0, 18, 0);
         reverse.Margin = new Padding(0, 7, 0, 0);
-        toolbar.Controls.AddRange([start, stop, save, reverse]);
+        toolbar.Controls.AddRange([start, stop, save, reset, reverse]);
         layout.Controls.Add(toolbar, 0, 0);
         AddColumn("RemoteIp", "相手 IP", 150, fill: true);
         AddColumn("HostName", "相手名（逆引き）", 180, fill: true);
@@ -90,12 +93,13 @@ internal sealed class TcpPeerView : UserControl
         {
             Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft,
             ForeColor = Color.FromArgb(104, 116, 134),
-            Text = "同じ相手 IP の通信を合算します。接続回数は監視中に観測した接続イベント数です。\n開始・最終は最初と最後の観測時刻です。監視前からの接続は回数に含めません。\n停止後も保存できます。再開・インタフェース変更で記録を消去します。"
+            Text = "同じ相手 IP の通信を合算します。接続回数は監視中に観測した接続イベント数です。\n開始・最終は最初と最後の観測時刻です。監視前からの接続は回数に含めません。\n停止後も保存できます。「リセット」でこの一覧の集計をやり直せます。"
         }, 0, 3);
         Controls.Add(layout);
         start.Click += async (_, _) => await StartMonitoringAsync();
         stop.Click += async (_, _) => await StopMonitoringAsync();
         save.Click += async (_, _) => await SaveLogAsync();
+        reset.Click += async (_, _) => await ResetLogAsync();
         timer.Tick += (_, _) => RefreshSnapshot();
         reverse.CheckedChanged += (_, _) =>
         {
@@ -305,11 +309,46 @@ internal sealed class TcpPeerView : UserControl
         start.Enabled = addresses.Length != 0 && !stopFailed && !monitorRequested && !client.IsRunning && pendingOperations == 0;
         stop.Enabled = (monitorRequested || client.IsRunning || stopFailed) && (monitorRequested || pendingOperations == 0);
         save.Enabled = !saving && appliedRevision == revision && pendingOperations == 0 && client.TcpSnapshot.Count > 0;
+        reset.Enabled = !saving && appliedRevision == revision && pendingOperations == 0
+            && (client.IsRunning || client.TcpSnapshot.Count > 0 || client.DroppedEvents > 0);
+    }
+
+    private async Task ResetLogAsync()
+    {
+        if (disposed || !reset.Enabled) return;
+        resetting = true;
+        pendingOperations++;
+        operationError = null;
+        CancelDns();
+        grid.Rows.Clear();
+        status.Text = "相手別 TCP ログをリセットしています…";
+        UpdateButtons();
+        var acquired = false;
+        try
+        {
+            await operations.WaitAsync(lifetime.Token);
+            acquired = true;
+            await client.ResetTcpPeersAsync(lifetime.Token);
+        }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            monitorRequested = false;
+            if (!disposed) operationError = "相手別 TCP ログのリセットを確認できません: " + TrafficMonitorClient.FriendlyError(ex);
+            if (acquired) await StopAfterFailureAsync();
+        }
+        finally
+        {
+            if (acquired) operations.Release();
+            resetting = false;
+            pendingOperations--;
+            if (!disposed) { UpdateButtons(); RefreshSnapshot(); }
+        }
     }
 
     private void RefreshSnapshot()
     {
-        if (disposed || !Visible || !IsHandleCreated) return;
+        if (disposed || resetting || !Visible || !IsHandleCreated) return;
         try
         {
             UpdateButtons();
@@ -505,6 +544,7 @@ internal sealed class TcpPeerView : UserControl
                 start.Enabled = false;
                 stop.Enabled = false;
                 save.Enabled = false;
+                reset.Enabled = false;
                 reverse.Enabled = false;
             }
         }

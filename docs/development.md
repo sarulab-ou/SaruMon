@@ -55,8 +55,8 @@ dotnet run --project tests/SaruMon.Tests/SaruMon.Tests.csproj --configuration Re
 | `artifacts/publish/win-x64/SaruMon.exe` | 配布用の単一 EXE |
 | `artifacts/SaruMon-win-x64.zip` | ポータブル版・アプリ内更新用 |
 | `artifacts/SaruMon-win-x64.zip.sha256` | アプリ内更新で照合するハッシュ |
-| `artifacts/SaruMon-0.1.8-Setup-x64.exe` | v0.1.8 インストーラー |
-| `artifacts/SaruMon-0.1.8-SHA256SUMS.txt` | v0.1.8 インストーラーの SHA-256 |
+| `artifacts/SaruMon-0.1.9-Setup-x64.exe` | v0.1.9 インストーラー |
+| `artifacts/SaruMon-0.1.9-SHA256SUMS.txt` | v0.1.9 インストーラーの SHA-256 |
 
 ビルド成果物は Git に追加しません。公開手順は [releasing.md](releasing.md) を参照してください。
 
@@ -67,7 +67,7 @@ dotnet run --project tests/SaruMon.Tests/SaruMon.Tests.csproj --configuration Re
 「Windows ログイン時に起動」コンポーネントは既定で選択され、現在のユーザーのログイン時にインストール先の `SaruMon.exe --tray` を実行するよう登録します。対話形式ではチェックを外せます。サイレントインストールで登録を無効にする場合は `/NoStartup` を指定します。
 
 ```powershell
-Start-Process -FilePath '.\artifacts\SaruMon-0.1.8-Setup-x64.exe' -ArgumentList '/S', '/NoStartup' -WindowStyle Hidden -Wait
+Start-Process -FilePath '.\artifacts\SaruMon-0.1.9-Setup-x64.exe' -ArgumentList '/S', '/NoStartup' -WindowStyle Hidden -Wait
 ```
 
 ZIP 版はアプリ内で自動起動を有効にします。インストーラーの自動起動登録は、Windows の通知領域でアイコンを常時表示する設定を変更しません。表示位置は起動後に利用者が調整します。
@@ -97,6 +97,8 @@ ZIP 版はアプリ内で自動起動を有効にします。インストーラ�
 「相手ごとの通信量」は `TcpPeerView` と `TrafficMonitorClient(MonitoringMode.Tcp)` を使います。利用者が開始した時だけ補助プロセスを昇格し、TCP の送信・受信・接続イベントを観測します。`TcpPeerTracker` は選択ローカル IP の通信を相手 IP ごとにまとめ、異なるポート・接続も同じ相手の `SentBytes` / `ReceivedBytes` に加算します。`RecordConnection` は Connect / Accept イベントごとに `ConnectionCount` を増やします。監視開始前からの接続については回数を推測せず、接続イベント未観測なら 0 です。ループバックで両端が選択ローカル IP に含まれる場合は、両端のイベントを加算します。`FirstSeen` / `LastSeen` は、監視中にその相手の接続イベントまたは通信を最初・最後に観測した時刻です。最大 2,048 相手を期限切れなしで保持し、上限後は既存相手の合計を維持しながら新規相手の未記録イベントを数えます。
 
 TCP の「ログを保存」はクリック時点のスナップショットを固定し、`TcpLogExporter` で次の 7 列を UTF-8 BOM 付き CSV に保存します。相手名は逆引きが有効でキャッシュ済みの場合だけ含めます。CSV はポート・ローカル側・メタデータ列を追加しません。開始時刻と最終時刻はローカルオフセット付き ISO 8601 です。部分集計の場合は画面、保存ダイアログの題名、既定のファイル名、保存結果に「一部未記録」と表示します。
+
+「リセット」は相手別一覧とログだけを初期化します。観測中は補助プロセスから次の集計が届いた時点で完了し、リセット前に取得していたイベントはタイムスタンプで除きます。通信量タブに使う全体集計は同じ観測区間のまま継続します。
 
 ```text
 相手IP,相手名,上り合計（バイト）,下り合計（バイト）,接続回数,開始時刻,最終時刻
