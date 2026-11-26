@@ -1,13 +1,13 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 
-namespace SaruMon.Udp;
+namespace SaruMon.Monitoring;
 
 /// <summary>
 /// Owns only the handle returned by StartTrace. Never adopts or stops an existing session.
 /// TraceEventSession.Stop is deliberately avoided: it also resets the global CPU sampling interval.
 /// </summary>
-internal sealed class UdpEtwSession : IDisposable
+internal sealed class TrafficEtwSession : IDisposable
 {
     private readonly object gate = new();
     private readonly Guid sessionGuid = Guid.NewGuid();
@@ -15,15 +15,15 @@ internal sealed class UdpEtwSession : IDisposable
     private (uint Events, uint Buffers) lastLoss;
     internal string Name { get; }
 
-    internal UdpEtwSession(string name)
+    internal TrafficEtwSession(string name)
     {
         Name = name;
         using var properties = new PropertiesBuffer(sessionGuid);
         var status = StartTrace(out var createdHandle, name, properties.Pointer);
         if (status == 183)
-            throw new InvalidOperationException("SaruMon の UDP 監視セッションが既に存在します。別の監視を終了してください。異常終了後の場合は Windows を再起動してからお試しください。");
-        if (status == 5) throw new UnauthorizedAccessException("UDP 監視には管理者の承認が必要です。");
-        if (status != 0) throw new Win32Exception((int)status, "UDP 監視セッションを開始できませんでした。");
+            throw new InvalidOperationException("SaruMon の通信監視セッションが既に存在します。別の監視を終了してください。異常終了後の場合は Windows を再起動してからお試しください。");
+        if (status == 5) throw new UnauthorizedAccessException("通信監視には管理者の承認が必要です。");
+        if (status != 0) throw new Win32Exception((int)status, "通信監視セッションを開始できませんでした。");
         handle = createdHandle;
     }
 
@@ -51,7 +51,7 @@ internal sealed class UdpEtwSession : IDisposable
             if (handle == 0) return;
             using var properties = new PropertiesBuffer(sessionGuid);
             var status = ControlTrace(handle, null, properties.Pointer, 1);
-            if (status != 0 && status != 4201) throw new Win32Exception((int)status, "UDP 監視セッションを停止できませんでした。");
+            if (status != 0 && status != 4201) throw new Win32Exception((int)status, "通信監視セッションを停止できませんでした。");
             if (status == 0)
             {
                 var value = Marshal.PtrToStructure<TraceProperties>(properties.Pointer);

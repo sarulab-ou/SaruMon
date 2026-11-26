@@ -1,7 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using SaruMon.Core;
-using SaruMon.Udp;
+using SaruMon.Monitoring;
 
 namespace SaruMon.Tests;
 
@@ -11,7 +11,7 @@ internal static class UdpLiveSmoke
     internal static async Task<int> RunAsync()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-        await using var monitor = new UdpMonitorClient();
+        await using var monitor = new TrafficMonitorClient(MonitoringMode.Udp);
         var endpoints = new List<DatagramPair>();
         try
         {
@@ -23,7 +23,7 @@ internal static class UdpLiveSmoke
 
             foreach (var pair in endpoints) await pair.SendAsync(3, timeout.Token);
             await WaitForPacketsAsync(3);
-            var before = endpoints.Select(pair => Find(monitor.Snapshot, pair)
+            var before = endpoints.Select(pair => Find(monitor.UdpSnapshot, pair)
                 ?? throw new InvalidOperationException("Missing observed flow.")).ToArray();
             foreach (var flow in before)
                 if (flow.FirstSeen == default || flow.LastSeen < flow.FirstSeen || flow.Bytes < 3 * DatagramPair.PayloadSize)
@@ -35,7 +35,7 @@ internal static class UdpLiveSmoke
             if (monitor.IsRunning) throw new InvalidOperationException("Monitoring is still running after StopAsync.");
             for (var index = 0; index < endpoints.Count; index++)
             {
-                var retained = Find(monitor.Snapshot, endpoints[index])
+                var retained = Find(monitor.UdpSnapshot, endpoints[index])
                     ?? throw new InvalidOperationException("Stopping erased the observed rows.");
                 if (retained.Packets < 4 || retained.Bytes < 4 * DatagramPair.PayloadSize || retained.FirstSeen != before[index].FirstSeen)
                     throw new InvalidOperationException("The final snapshot lost counts or changed FirstSeen.");
@@ -52,7 +52,7 @@ internal static class UdpLiveSmoke
                 observed.CancelAfter(TimeSpan.FromSeconds(10));
                 while (endpoints.Any(pair =>
                     {
-                        var flow = Find(monitor.Snapshot, pair);
+                        var flow = Find(monitor.UdpSnapshot, pair);
                         return flow is null || flow.Packets < minimum;
                     }))
                 {

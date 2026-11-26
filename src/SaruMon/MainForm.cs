@@ -57,7 +57,7 @@ internal sealed class MainForm : Form
         help.DropDownItems.Add("更新を確認(&U)…", null, (_, _) => OpenUpdates());
         help.DropDownItems.Add(new ToolStripSeparator());
         help.DropDownItems.Add("SaruMon について", null, (_, _) => MessageBox.Show(this,
-            $"SaruMon {UpdateService.CurrentVersion}\n\nインタフェースごとの通信量、TCP 接続先、UDP 送信先の監視と CSV 保存ができます。\nパケットの内容は取得しません。\n\n実行場所:\n{Environment.ProcessPath}", "SaruMon について", MessageBoxButtons.OK, MessageBoxIcon.Information));
+            $"SaruMon {UpdateService.CurrentVersion}\n\nインタフェースごとの通信量、TCP・UDP の監視と CSV 保存ができます。\nパケットの内容は取得しません。\n\n実行場所:\n{Environment.ProcessPath}", "SaruMon について", MessageBoxButtons.OK, MessageBoxIcon.Information));
         menu.Items.AddRange([file, help]);
         MainMenuStrip = menu;
 
@@ -100,9 +100,9 @@ internal sealed class MainForm : Form
         trafficLayout.Controls.Add(rates, 0, 0);
         trafficLayout.Controls.Add(graph, 0, 1);
         var legend = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty, Padding = new Padding(0, 5, 0, 0) };
-        foreach (var (state, text) in new[] { (TrafficState.Receiving, "↓ 受信"), (TrafficState.Sending, "↑ 送信"), (TrafficState.Idle, "● 通信なし"), (TrafficState.Offline, "× 未接続") })
+        foreach (var (state, text) in new[] { (TrafficState.Receiving, "↓ 受信"), (TrafficState.Sending, "↑ 送信"), (TrafficState.Idle, "□ 通信なし"), (TrafficState.Offline, "× 未接続") })
             legend.Controls.Add(new Label { Text = text, AutoSize = true, ForeColor = TrafficIcons.ColorFor(state), Margin = new Padding(0, 0, 18, 0) });
-        tips.SetToolTip(legend, "下りは緑、上りは赤。直近の通信速度が大きいほど、それぞれの矢印が強く光ります。");
+        tips.SetToolTip(legend, "下りは緑、上りは赤。白地に、通信があった方向の矢印だけを固定色で表示します。");
         trafficLayout.Controls.Add(legend, 0, 2);
         trafficPage.Controls.Add(trafficLayout);
         peersPage.Controls.Add(connections);
@@ -266,7 +266,7 @@ internal sealed class MainForm : Form
         "SaruMon アイコンを常に表示する", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
     private void ShowHelp() => MessageBox.Show(this,
-        "1. 監視するインタフェースを選択します。\n2. 通知領域に格納すると、矢印の発光で通信を確認できます。\n\n下り（受信）: 緑の下矢印 / 上り（送信）: 赤の上矢印\n直近の通信速度が大きいほど、各矢印が強く光ります。\n通信がない方向は暗い灰色、未接続はオレンジの × です。\n速度の単位はバイト/秒です（1 KiB = 1,024 B）。\n合計は現在のインタフェースを選択してからの通信量です。\n\n「接続先（TCP）」タブで IP・宛先ポート・接続状態を確認できます。\n「逆引き」をオンにすると、DNS で取得したホスト名も表示します。\nホスト名は閲覧サイト名とは限りません。\n\n「UDP 送信先」で「開始」を押すと、管理者承認後に UDP 送信を記録します。\n「ログを保存」で、初回検出時刻・送信イベント数・累積送信量を CSV に保存できます。\n監視開始前の通信は含みません。停止後も保存でき、再開・インタフェース変更で記録をクリアします。\n\nアイコンが隠れている場合は、タスクバー右端の ∧ を開き、SaruMon を時計の近くへドラッグしてください。\nアイコンのクリック、または SaruMon の再起動で画面が開きます。\n終了するには、メニューの「終了」を選びます。\n\n更新は「ヘルプ → 更新を確認」から実行できます。",
+        "1. 監視するインタフェースを選択します。\n2. 通知領域に格納すると、白地の矢印で通信を確認できます。\n\n下り（受信）: 緑の下矢印 / 上り（送信）: 赤の上矢印\n色の濃さは固定です。0.5秒ごとに、通信があった方向の矢印を表示します。\n通信がない方向の矢印は消え、未接続はオレンジの × です。\n速度の単位はバイト/秒です（1 KiB = 1,024 B）。\n合計は現在のインタフェースを選択してからの通信量です。\n\n「接続先（TCP）」タブで IP・宛先ポート・接続状態を確認できます。\n「相手ごとの通信量」で監視を開始すると、相手 IP ごとの上り・下り合計を記録します。\n「ログを保存」で、相手 IP・名前・上り合計・下り合計の CSV を保存できます。\n「逆引き」をオンにすると、DNS で取得したホスト名も表示します。\nホスト名は閲覧サイト名とは限りません。\n\n「UDP 送信先」で「開始」を押すと、管理者承認後に UDP 送信を記録します。\n「保存」で、初回検出時刻・送信イベント数・累積送信量を CSV に保存できます。\n監視開始前の通信は含みません。停止後も保存でき、再開・インタフェース変更で記録をクリアします。\n\nアイコンが隠れている場合は、タスクバー右端の ∧ を開き、SaruMon を時計の近くへドラッグしてください。\nアイコンのクリック、または SaruMon の再起動で画面が開きます。\n終了するには、メニューの「終了」を選びます。\n\n更新は「ヘルプ → 更新を確認」から実行できます。",
         "SaruMon の使い方", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
     public async void RequestExit()
@@ -275,13 +275,17 @@ internal sealed class MainForm : Form
         shuttingDown = true;
         timer.Stop();
         Enabled = false;
-        try { await udpConnections.ShutdownAsync(); }
+        try
+        {
+            await connections.ShutdownAsync();
+            await udpConnections.ShutdownAsync();
+        }
         catch (Exception ex)
         {
             shuttingDown = false;
             Enabled = true;
             timer.Start();
-            MessageBox.Show(this, "UDP 監視の終了を確認できませんでした。\n" + ex.Message,
+            MessageBox.Show(this, "通信監視の終了を確認できませんでした。\n" + ex.Message,
                 "SaruMon", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }

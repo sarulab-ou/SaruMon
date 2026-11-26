@@ -6,19 +6,21 @@ using System.Net;
 using System.Security.Cryptography;
 using SaruMon.Core;
 
-namespace SaruMon.Udp;
+namespace SaruMon.Monitoring;
 
-internal sealed class UdpMonitorClient : IAsyncDisposable
+internal sealed class TrafficMonitorClient : IAsyncDisposable
 {
-    private const string StopPendingMessage = "UDP 監視の補助プロセスの終了を確認できませんでした。停止を再試行してください。";
+    private const string StopPendingMessage = "通信監視の補助プロセスの終了を確認できませんでした。停止を再試行してください。";
     private readonly SemaphoreSlim gate = new(1);
     private readonly object snapshotGate = new();
+    private readonly MonitoringMode mode;
     private NamedPipeServerStream? pipe;
-    private UdpChannel? channel;
+    private TrafficChannel? channel;
     private CancellationTokenSource? shutdown;
     private Process? helper;
     private Task? readerTask;
-    private IReadOnlyList<UdpFlowInfo> snapshot = Array.Empty<UdpFlowInfo>();
+    private IReadOnlyList<UdpFlowInfo> udpSnapshot = Array.Empty<UdpFlowInfo>();
+    private IReadOnlyList<TcpPeerInfo> tcpSnapshot = Array.Empty<TcpPeerInfo>();
     private string? error;
     private bool running;
     private bool disposed;
@@ -26,14 +28,21 @@ internal sealed class UdpMonitorClient : IAsyncDisposable
     private long droppedEvents;
     private string? beforeStopFailure;
 
+    public TrafficMonitorClient(MonitoringMode mode)
+    {
+        if (!TrafficWireProtocol.IsMode(mode)) throw new ArgumentOutOfRangeException(nameof(mode));
+        this.mode = mode;
+    }
+
     public bool IsRunning => Volatile.Read(ref running);
-    public IReadOnlyList<UdpFlowInfo> Snapshot => Volatile.Read(ref snapshot);
+    public IReadOnlyList<UdpFlowInfo> UdpSnapshot => Volatile.Read(ref udpSnapshot);
+    public IReadOnlyList<TcpPeerInfo> TcpSnapshot => Volatile.Read(ref tcpSnapshot);
     public string? Error => Volatile.Read(ref error);
     public long DroppedEvents => Interlocked.Read(ref droppedEvents);
 
     public async Task StartAsync(IReadOnlyCollection<IPAddress> addresses, CancellationToken token)
     {
-        var normalized = UdpProtocol.ParseAddresses(addresses.Select(address => address.ToString()).ToArray());
+        var normalized = TrafficWireProtocol.ParseAddresses(addresses.Select(address => address.ToString()).ToArray());
         await gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
@@ -41,11 +50,11 @@ internal sealed class UdpMonitorClient : IAsyncDisposable
             if (running) return;
             await StopCoreAsync().ConfigureAwait(false);
             Volatile.Write(ref error, null);
-            Volatile.Write(ref snapshot, Array.Empty<UdpFlowInfo>());
+            ClearSnapshots();
             Interlocked.Exchange(ref droppedEvents, 0);
-            var pipeName = "SaruMon-UDP-" + Guid.NewGuid().ToString("N");
+            var pipeName = "SaruMon-Monitor-" + Guid.NewGuid().ToString("N");
             var nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-            pipe = UdpProcessSecurity.CreateServer(pipeName);
+            pipe = TrafficProcessSecurity.CreateServer(pipeName);
             shutdown = new CancellationTokenSource();
             using var parent = Process.GetCurrentProcess();
             var path = Environment.ProcessPath ?? throw new InvalidOperationException("実行ファイルの場所が不明です。");
@@ -56,27 +65,27 @@ internal sealed class UdpMonitorClient : IAsyncDisposable
                 WindowStyle = ProcessWindowStyle.Hidden,
                 WorkingDirectory = Path.GetDirectoryName(path)!
             };
-            foreach (var argument in new[] { "--udp-helper", pipeName, nonce,
+            foreach (var argument in new[] { "--traffic-helper", mode == MonitoringMode.Udp ? "udp" : "tcp", pipeName, nonce,
                 parent.Id.ToString(CultureInfo.InvariantCulture),
-                parent.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture), UdpProcessSecurity.CurrentSid })
+                parent.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture), TrafficProcessSecurity.CurrentSid })
                 start.ArgumentList.Add(argument);
             // ShellExecute can wait for UAC. Keep the UI thread responsive while the user responds.
             helper = await Task.Run(() => Process.Start(start), CancellationToken.None).ConfigureAwait(false)
-                ?? throw new InvalidOperationException("UDP 監視の補助プロセスを起動できませんでした。");
+                ?? throw new InvalidOperationException("通信監視の補助プロセスを起動できませんでした。");
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
             timeout.CancelAfter(TimeSpan.FromSeconds(15));
             await pipe.WaitForConnectionAsync(timeout.Token).ConfigureAwait(false);
-            UdpProcessSecurity.VerifyClient(pipe, helper.Id);
-            channel = new UdpChannel(pipe);
+            TrafficProcessSecurity.VerifyClient(pipe, helper.Id);
+            channel = new TrafficChannel(pipe);
             var hello = await channel.ReadAsync(timeout.Token).ConfigureAwait(false);
-            if (hello?.Type != "hello" || hello.Nonce != nonce) throw new InvalidDataException("UDP 監視の認証に失敗しました。");
+            if (hello?.Type != "hello" || hello.Nonce != nonce || hello.Mode != mode) throw new InvalidDataException("通信監視の認証に失敗しました。");
             long nextRevision;
             lock (snapshotGate) nextRevision = ++revision;
-            await channel.WriteAsync(new UdpMessage("configure", nonce,
-                normalized.Select(address => address.ToString()).ToArray(), Revision: nextRevision), timeout.Token).ConfigureAwait(false);
+            await channel.WriteAsync(new TrafficMessage("configure", nonce,
+                normalized.Select(address => address.ToString()).ToArray(), Revision: nextRevision, Mode: mode), timeout.Token).ConfigureAwait(false);
             var ready = await channel.ReadAsync(timeout.Token).ConfigureAwait(false);
             if (ready?.Type == "error") throw new InvalidOperationException(SafeError(ready.Error));
-            if (ready?.Type != "ready" || ready.Revision != nextRevision) throw new InvalidDataException("UDP 監視を開始できませんでした。");
+            if (ready?.Type != "ready" || ready.Revision != nextRevision || ready.Mode != mode) throw new InvalidDataException("通信監視を開始できませんでした。");
             Volatile.Write(ref running, true);
             readerTask = ReadSnapshotsAsync(channel, shutdown.Token);
         }
@@ -91,7 +100,7 @@ internal sealed class UdpMonitorClient : IAsyncDisposable
 
     public async Task SetLocalAddressesAsync(IReadOnlyCollection<IPAddress> addresses, CancellationToken token)
     {
-        var normalized = UdpProtocol.ParseAddresses(addresses.Select(address => address.ToString()).ToArray());
+        var normalized = TrafficWireProtocol.ParseAddresses(addresses.Select(address => address.ToString()).ToArray());
         await gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
@@ -100,14 +109,14 @@ internal sealed class UdpMonitorClient : IAsyncDisposable
             lock (snapshotGate)
             {
                 nextRevision = ++revision;
-                Volatile.Write(ref snapshot, Array.Empty<UdpFlowInfo>());
+                ClearSnapshots();
                 Interlocked.Exchange(ref droppedEvents, 0);
             }
             if (!running || channel is null) return;
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
             timeout.CancelAfter(TimeSpan.FromSeconds(3));
-            await channel.WriteAsync(new UdpMessage("configure", Addresses:
-                normalized.Select(address => address.ToString()).ToArray(), Revision: nextRevision), timeout.Token).ConfigureAwait(false);
+            await channel.WriteAsync(new TrafficMessage("configure", Addresses:
+                normalized.Select(address => address.ToString()).ToArray(), Revision: nextRevision, Mode: mode), timeout.Token).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -118,7 +127,7 @@ internal sealed class UdpMonitorClient : IAsyncDisposable
         finally { gate.Release(); }
     }
 
-    private async Task ReadSnapshotsAsync(UdpChannel activeChannel, CancellationToken token)
+    private async Task ReadSnapshotsAsync(TrafficChannel activeChannel, CancellationToken token)
     {
         try
         {
@@ -127,13 +136,14 @@ internal sealed class UdpMonitorClient : IAsyncDisposable
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
                 timeout.CancelAfter(TimeSpan.FromSeconds(10));
                 var message = await activeChannel.ReadAsync(timeout.Token).ConfigureAwait(false)
-                    ?? throw new IOException("UDP 監視の補助プロセスとの接続が終了しました。");
+                    ?? throw new IOException("通信監視の補助プロセスとの接続が終了しました。");
                 if (message.Type == "error") throw new InvalidOperationException(SafeError(message.Error));
-                UdpProtocol.ValidateSnapshot(message);
+                TrafficWireProtocol.ValidateSnapshot(message, mode);
                 lock (snapshotGate)
                 {
                     if (message.Revision != revision) continue;
-                    Volatile.Write(ref snapshot, Array.AsReadOnly(message.Flows!));
+                    if (mode == MonitoringMode.Udp) Volatile.Write(ref udpSnapshot, Array.AsReadOnly(message.UdpFlows!));
+                    else Volatile.Write(ref tcpSnapshot, Array.AsReadOnly(message.TcpPeers!));
                     Interlocked.Exchange(ref droppedEvents, message.DroppedEvents);
                     Volatile.Write(ref error, message.DroppedEvents > 0 || message.CaptureLoss
                         ? "記録上限またはイベント欠落のため、一部の通信を記録できませんでした。表示・保存は観測できた範囲です。" : null);
@@ -168,7 +178,7 @@ internal sealed class UdpMonitorClient : IAsyncDisposable
         if (channel is not null && pipe?.IsConnected == true)
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(1));
-            try { await channel.WriteAsync(new UdpMessage("stop"), timeout.Token).ConfigureAwait(false); }
+            try { await channel.WriteAsync(new TrafficMessage("stop", Mode: mode), timeout.Token).ConfigureAwait(false); }
             catch (Exception exception) when (exception is IOException or OperationCanceledException or ObjectDisposedException) { }
         }
         if (readerTask is not null && !readerTask.IsCompleted)
@@ -197,7 +207,7 @@ internal sealed class UdpMonitorClient : IAsyncDisposable
                     beforeStopFailure = null;
                 }
                 if (helper.ExitCode != 0 && Error is null)
-                    Volatile.Write(ref error, "UDP 監視の補助プロセスが正常に終了しませんでした。再開できない場合は Windows を再起動してください。");
+                    Volatile.Write(ref error, "通信監視の補助プロセスが正常に終了しませんでした。再開できない場合は Windows を再起動してください。");
             }
             catch (OperationCanceledException)
             {
@@ -230,14 +240,20 @@ internal sealed class UdpMonitorClient : IAsyncDisposable
         finally { gate.Release(); }
     }
 
-    internal static string SafeError(string? message) => string.IsNullOrWhiteSpace(message) ? "UDP 監視に失敗しました。"
+    private void ClearSnapshots()
+    {
+        Volatile.Write(ref udpSnapshot, Array.Empty<UdpFlowInfo>());
+        Volatile.Write(ref tcpSnapshot, Array.Empty<TcpPeerInfo>());
+    }
+
+    internal static string SafeError(string? message) => string.IsNullOrWhiteSpace(message) ? "通信監視に失敗しました。"
         : new string(message.Take(512).Where(character => !char.IsControl(character)).ToArray());
 
     internal static string FriendlyError(Exception exception) => exception switch
     {
-        Win32Exception { NativeErrorCode: 1223 } => "UDP 監視の管理者承認がキャンセルされました。",
-        UnauthorizedAccessException => "UDP 監視を開始できません。現在の Windows ユーザーで管理者承認が必要です。",
-        OperationCanceledException => "UDP 監視の応答を待機できませんでした。監視を停止しました。",
+        Win32Exception { NativeErrorCode: 1223 } => "通信監視の管理者承認がキャンセルされました。",
+        UnauthorizedAccessException => "通信監視を開始できません。現在の Windows ユーザーで管理者承認が必要です。",
+        OperationCanceledException => "通信監視の応答を待機できませんでした。監視を停止しました。",
         _ => SafeError(exception.Message)
     };
 }

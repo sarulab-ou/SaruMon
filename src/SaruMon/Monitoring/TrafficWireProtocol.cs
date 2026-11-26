@@ -5,16 +5,19 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using SaruMon.Core;
 
-namespace SaruMon.Udp;
+namespace SaruMon.Monitoring;
 
-internal sealed record UdpMessage(string Type, string? Nonce = null, string[]? Addresses = null,
-    UdpFlowInfo[]? Flows = null, string? Error = null, long Revision = 0, long DroppedEvents = 0,
-    bool CaptureLoss = false, bool Final = false);
+internal enum MonitoringMode { Udp, Tcp }
 
-internal static class UdpProtocol
+internal sealed record TrafficMessage(string Type, string? Nonce = null, string[]? Addresses = null,
+    UdpFlowInfo[]? UdpFlows = null, TcpPeerInfo[]? TcpPeers = null, string? Error = null,
+    long Revision = 0, long DroppedEvents = 0, bool CaptureLoss = false, bool Final = false,
+    MonitoringMode? Mode = null);
+
+internal static class TrafficWireProtocol
 {
     internal const int MaxAddresses = 128;
-    internal const int MaxFlows = 2048;
+    internal const int MaxEntries = 2048;
     internal const int MaxLineChars = 1024 * 1024;
     internal static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -23,8 +26,10 @@ internal static class UdpProtocol
     };
 
     internal static bool IsNonce(string? value) => value is { Length: 64 } && value.All(Uri.IsHexDigit);
-    internal static bool IsPipeName(string value) => value.StartsWith("SaruMon-UDP-", StringComparison.Ordinal)
-        && value.Length == 44 && value.AsSpan(12).ToString().All(Uri.IsHexDigit);
+    internal static bool IsPipeName(string value) => value.StartsWith("SaruMon-Monitor-", StringComparison.Ordinal)
+        && value.Length == 48 && value.AsSpan(16).ToString().All(Uri.IsHexDigit);
+
+    internal static bool IsMode(MonitoringMode mode) => mode is MonitoringMode.Udp or MonitoringMode.Tcp;
 
     internal static IPAddress[] ParseAddresses(string[]? addresses)
     {
@@ -41,12 +46,27 @@ internal static class UdpProtocol
         return result;
     }
 
-    internal static void ValidateSnapshot(UdpMessage message)
+    internal static void ValidateSnapshot(TrafficMessage message, MonitoringMode expectedMode)
     {
-        if (message.Type != "snapshot" || message.Revision <= 0 || message.Flows is null || message.Flows.Length > MaxFlows
-            || message.DroppedEvents < 0)
+        if (!IsMode(expectedMode) || message.Mode != expectedMode || message.Type != "snapshot"
+            || message.Revision <= 0 || message.DroppedEvents < 0)
+            throw new InvalidDataException("通信監視データが不正です。");
+        if (expectedMode == MonitoringMode.Tcp)
+        {
+            if (message.UdpFlows is not null || message.TcpPeers is null || message.TcpPeers.Length > MaxEntries)
+                throw new InvalidDataException("TCP 監視データが不正です。");
+            foreach (var peer in message.TcpPeers)
+            {
+                if (peer is null || peer.SentBytes < 0 || peer.ReceivedBytes < 0
+                    || peer.FirstSeen == default || peer.LastSeen < peer.FirstSeen)
+                    throw new InvalidDataException("TCP の集計が不正です。");
+                ParseAddress(peer.RemoteAddress);
+            }
+            return;
+        }
+        if (message.TcpPeers is not null || message.UdpFlows is null || message.UdpFlows.Length > MaxEntries)
             throw new InvalidDataException("UDP 監視データが不正です。");
-        foreach (var flow in message.Flows)
+        foreach (var flow in message.UdpFlows)
         {
             if (flow is null || flow.LocalPort is < 1 or > 65535 || flow.RemotePort is < 1 or > 65535
                 || flow.Packets < 1 || flow.Bytes < 0 || flow.FirstSeen == default
@@ -58,16 +78,16 @@ internal static class UdpProtocol
         }
     }
 
-    internal static UdpMessage Deserialize(string value)
+    internal static TrafficMessage Deserialize(string value)
     {
         if (value.Length > MaxLineChars) throw new InvalidDataException("監視メッセージが大きすぎます。");
-        return JsonSerializer.Deserialize<UdpMessage>(value, JsonOptions)
+        return JsonSerializer.Deserialize<TrafficMessage>(value, JsonOptions)
             ?? throw new InvalidDataException("監視メッセージがありません。");
     }
 }
 
 /// <summary>Bounded, newline-delimited JSON. Only one reader and one writer use each channel.</summary>
-internal sealed class UdpChannel : IDisposable
+internal sealed class TrafficChannel : IDisposable
 {
     private readonly StreamReader reader;
     private readonly StreamWriter writer;
@@ -76,13 +96,13 @@ internal sealed class UdpChannel : IDisposable
     private int position;
     private int length;
 
-    internal UdpChannel(Stream stream)
+    internal TrafficChannel(Stream stream)
     {
         reader = new StreamReader(stream, new UTF8Encoding(false, true), false, 8192, leaveOpen: true);
         writer = new StreamWriter(stream, new UTF8Encoding(false, true), 8192, leaveOpen: true) { AutoFlush = true };
     }
 
-    internal async Task<UdpMessage?> ReadAsync(CancellationToken token)
+    internal async Task<TrafficMessage?> ReadAsync(CancellationToken token)
     {
         var text = new StringBuilder();
         while (true)
@@ -99,19 +119,19 @@ internal sealed class UdpChannel : IDisposable
             }
             var end = Array.IndexOf(buffer, '\n', position, length - position);
             var count = (end < 0 ? length : end) - position;
-            if (text.Length + count > UdpProtocol.MaxLineChars) throw new InvalidDataException("監視メッセージが大きすぎます。");
+            if (text.Length + count > TrafficWireProtocol.MaxLineChars) throw new InvalidDataException("監視メッセージが大きすぎます。");
             text.Append(buffer, position, count);
             position += count;
             if (end < 0) continue;
             position++;
-            return UdpProtocol.Deserialize(text.ToString());
+            return TrafficWireProtocol.Deserialize(text.ToString());
         }
     }
 
-    internal async Task WriteAsync(UdpMessage message, CancellationToken token)
+    internal async Task WriteAsync(TrafficMessage message, CancellationToken token)
     {
-        var json = JsonSerializer.Serialize(message, UdpProtocol.JsonOptions);
-        if (json.Length > UdpProtocol.MaxLineChars) throw new InvalidDataException("監視メッセージが大きすぎます。");
+        var json = JsonSerializer.Serialize(message, TrafficWireProtocol.JsonOptions);
+        if (json.Length > TrafficWireProtocol.MaxLineChars) throw new InvalidDataException("監視メッセージが大きすぎます。");
         await writeGate.WaitAsync(token).ConfigureAwait(false);
         try { await writer.WriteLineAsync(json.AsMemory(), token).ConfigureAwait(false); }
         finally { writeGate.Release(); }

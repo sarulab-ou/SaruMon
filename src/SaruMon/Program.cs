@@ -5,9 +5,9 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
-        if (args.Length > 0 && args[0] == "--udp-helper")
+        if (args.Length > 0 && args[0] == "--traffic-helper")
         {
-            Environment.ExitCode = Udp.UdpMonitorHelper.RunAsync(args).GetAwaiter().GetResult();
+            Environment.ExitCode = Monitoring.TrafficMonitorHelper.RunAsync(args).GetAwaiter().GetResult();
             return;
         }
         ApplicationConfiguration.Initialize();

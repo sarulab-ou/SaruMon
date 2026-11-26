@@ -6,9 +6,9 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using Microsoft.Win32.SafeHandles;
 
-namespace SaruMon.Udp;
+namespace SaruMon.Monitoring;
 
-internal static class UdpProcessSecurity
+internal static class TrafficProcessSecurity
 {
     internal static string CurrentSid
     {
@@ -33,7 +33,7 @@ internal static class UdpProcessSecurity
     internal static void VerifyClient(PipeStream pipe, int expectedProcessId)
     {
         if (!GetNamedPipeClientProcessId(pipe.SafePipeHandle, out var processId)) throw new Win32Exception(Marshal.GetLastWin32Error());
-        if (processId != expectedProcessId) throw new UnauthorizedAccessException("UDP 監視の補助プロセスの接続元が一致しません。");
+        if (processId != expectedProcessId) throw new UnauthorizedAccessException("通信監視の補助プロセスの接続元が一致しません。");
     }
 
     internal static void VerifyServer(PipeStream pipe, Process parent, long expectedStartTicks)
@@ -44,7 +44,7 @@ internal static class UdpProcessSecurity
             || parent.SessionId != current.SessionId || parent.HasExited
             || !string.Equals(Path.GetFullPath(parent.MainModule?.FileName ?? ""),
                 Path.GetFullPath(Environment.ProcessPath ?? ""), StringComparison.OrdinalIgnoreCase))
-            throw new UnauthorizedAccessException("UDP 監視を要求したアプリを確認できません。");
+            throw new UnauthorizedAccessException("通信監視を要求したアプリを確認できません。");
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]

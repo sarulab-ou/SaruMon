@@ -8,6 +8,8 @@ namespace SaruMon;
 
 internal sealed class ConnectionsView : UserControl
 {
+    private readonly TabControl views = new() { Dock = DockStyle.Fill };
+    private readonly TcpPeerView peerView = new();
     private readonly CheckBox reverse = new() { Text = "逆引き（ホスト名を表示）", AutoSize = true, Anchor = AnchorStyles.Left };
     private readonly Button refresh = new() { Text = "再読み込み", AutoSize = true, Anchor = AnchorStyles.Right };
     private readonly Label status = new() { AutoSize = true, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
@@ -59,9 +61,15 @@ internal sealed class ConnectionsView : UserControl
         {
             Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft,
             ForeColor = Color.FromArgb(104, 116, 134),
-            Text = "現在の TCP 接続の一覧です。UDP の送信量とログは「UDP 送信先」タブで確認できます。\n逆引きは DNS に問い合わせます。取得できない場合も IP とポートは表示します。"
+            Text = "現在の TCP 接続です。「相手ごとの通信量」で上り・下りの合計を記録し、CSV に保存できます。\n逆引きは DNS に問い合わせます。取得できない場合も IP とポートは表示します。"
         }, 0, 3);
-        Controls.Add(layout);
+        var currentPage = new TabPage("現在の接続") { BackColor = Color.White };
+        var trafficPage = new TabPage("相手ごとの通信量") { BackColor = Color.White };
+        currentPage.Controls.Add(layout);
+        trafficPage.Controls.Add(peerView);
+        views.TabPages.AddRange([currentPage, trafficPage]);
+        Controls.Add(views);
+        views.SelectedIndexChanged += (_, _) => UpdatePolling();
         refresh.Click += async (_, _) => await RefreshAsync();
         timer.Tick += async (_, _) => await RefreshAsync();
         reverse.CheckedChanged += (_, _) =>
@@ -84,6 +92,8 @@ internal sealed class ConnectionsView : UserControl
 
     public void SetInterface(TrafficInterface? adapter)
     {
+        if (stopped) return;
+        peerView.SetInterface(adapter);
         var next = adapter?.IsUp == true
             ? adapter.Addresses.Select(value => IPAddress.TryParse(value, out var ip) ? ip : null).OfType<IPAddress>().ToArray()
             : [];
@@ -101,20 +111,25 @@ internal sealed class ConnectionsView : UserControl
     protected override void OnVisibleChanged(EventArgs e)
     {
         base.OnVisibleChanged(e);
-        if (stopped) return;
-        if (Visible && IsHandleCreated) { timer.Start(); _ = RefreshAsync(); }
-        else { timer.Stop(); CancelDns(); }
+        UpdatePolling();
     }
 
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-        if (Visible && !stopped) { timer.Start(); _ = RefreshAsync(); }
+        UpdatePolling();
+    }
+
+    private void UpdatePolling()
+    {
+        if (stopped) return;
+        if (Visible && IsHandleCreated && views.SelectedIndex == 0) { timer.Start(); _ = RefreshAsync(); }
+        else { timer.Stop(); CancelDns(); }
     }
 
     private async Task RefreshAsync()
     {
-        if (stopped || !Visible || !IsHandleCreated) return;
+        if (stopped || !Visible || !IsHandleCreated || views.SelectedIndex != 0) return;
         if (reading) { refreshPending = true; return; }
         reading = true;
         refresh.Enabled = false;
@@ -129,7 +144,7 @@ internal sealed class ConnectionsView : UserControl
                 return;
             }
             var connections = await Task.Run(() => TcpConnections.Read(selected));
-            if (stopped || !Visible || expected != revision) return;
+            if (stopped || !Visible || views.SelectedIndex != 0 || expected != revision) return;
             Render(connections);
             status.Text = $"{connections.Count} 接続 · {DateTime.Now:HH:mm:ss} 更新 · 2秒ごとに更新";
             StartDns();
@@ -193,7 +208,7 @@ internal sealed class ConnectionsView : UserControl
 
     private void StartDns()
     {
-        if (stopped || !Visible || !reverse.Checked || dnsCancellation is not null || grid.Rows.Count == 0) return;
+        if (stopped || !Visible || views.SelectedIndex != 0 || !reverse.Checked || dnsCancellation is not null || grid.Rows.Count == 0) return;
         var cancellation = new CancellationTokenSource();
         dnsCancellation = cancellation;
         _ = ResolveNamesAsync(cancellation, revision);
@@ -211,7 +226,7 @@ internal sealed class ConnectionsView : UserControl
                 cancellation.Token.ThrowIfCancellationRequested();
                 var names = await Task.WhenAll(batch.Select(async ip =>
                     (Address: ip, Name: await resolver.ResolveAsync(ip, cancellation.Token))));
-                if (stopped || !Visible || !reverse.Checked || expected != revision || cancellation.IsCancellationRequested) return;
+                if (stopped || !Visible || views.SelectedIndex != 0 || !reverse.Checked || expected != revision || cancellation.IsCancellationRequested) return;
                 foreach (DataGridViewRow row in grid.Rows)
                     foreach (var result in names)
                         if (((TcpConnectionInfo)row.Tag!).RemoteAddress.Equals(result.Address))
@@ -255,5 +270,13 @@ internal sealed class ConnectionsView : UserControl
             CancelDns();
         }
         base.Dispose(disposing);
+    }
+
+    public Task ShutdownAsync()
+    {
+        stopped = true;
+        timer.Stop();
+        CancelDns();
+        return peerView.ShutdownAsync();
     }
 }

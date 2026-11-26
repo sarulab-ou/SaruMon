@@ -3,7 +3,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using SaruMon.Core;
-using SaruMon.Udp;
+using SaruMon.Monitoring;
 
 namespace SaruMon;
 
@@ -11,7 +11,7 @@ internal sealed class UdpConnectionsView : UserControl
 {
     private readonly Button start = new() { Text = "開始（管理者権限）", AutoSize = true };
     private readonly Button stop = new() { Text = "停止", AutoSize = true, Enabled = false };
-    private readonly Button save = new() { Text = "ログを保存…", AutoSize = true, Enabled = false };
+    private readonly Button save = new() { Text = "保存", AutoSize = true, Enabled = false };
     private readonly CheckBox reverse = new() { Text = "逆引き（ホスト名を表示）", AutoSize = true, Anchor = AnchorStyles.Left };
     private readonly Label status = new() { AutoSize = true, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
     private readonly DataGridView grid = new()
@@ -23,7 +23,7 @@ internal sealed class UdpConnectionsView : UserControl
         AccessibleName = "選択したインタフェースで観測した UDP 送信先と累積送信量"
     };
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 2000 };
-    private readonly UdpMonitorClient client;
+    private readonly TrafficMonitorClient client;
     private readonly ReverseDnsResolver resolver;
     private readonly SemaphoreSlim operations = new(1, 1);
     private readonly CancellationTokenSource lifetime = new();
@@ -44,9 +44,9 @@ internal sealed class UdpConnectionsView : UserControl
     private CancellationTokenSource? startCancellation;
     private CancellationTokenSource? dnsCancellation;
 
-    public UdpConnectionsView(UdpMonitorClient? client = null, ReverseDnsResolver? resolver = null)
+    public UdpConnectionsView(TrafficMonitorClient? client = null, ReverseDnsResolver? resolver = null)
     {
-        this.client = client ?? new UdpMonitorClient();
+        this.client = client ?? new TrafficMonitorClient(MonitoringMode.Udp);
         this.resolver = resolver ?? new ReverseDnsResolver();
         Dock = DockStyle.Fill;
         Padding = new Padding(8);
@@ -282,7 +282,7 @@ internal sealed class UdpConnectionsView : UserControl
         if (disposed) return;
         start.Enabled = addresses.Length != 0 && !stopFailed && !monitorRequested && !client.IsRunning && pendingOperations == 0;
         stop.Enabled = (monitorRequested || client.IsRunning || stopFailed) && (monitorRequested || pendingOperations == 0);
-        save.Enabled = !saving && appliedRevision == revision && pendingOperations == 0 && client.Snapshot.Count > 0;
+        save.Enabled = !saving && appliedRevision == revision && pendingOperations == 0 && client.UdpSnapshot.Count > 0;
     }
 
     private void RefreshSnapshot()
@@ -320,7 +320,7 @@ internal sealed class UdpConnectionsView : UserControl
     {
         if (appliedRevision != revision || addresses.Length == 0) return [];
         var selected = addresses.ToHashSet();
-        return client.Snapshot.Where(flow => IPAddress.TryParse(flow.LocalAddress, out var local)
+        return client.UdpSnapshot.Where(flow => IPAddress.TryParse(flow.LocalAddress, out var local)
             && selected.Contains(Normalize(local))).OrderByDescending(flow => flow.LastSeen).ToArray();
     }
 
