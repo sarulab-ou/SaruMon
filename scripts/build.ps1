@@ -44,7 +44,7 @@ try {
     $zipPath = Join-Path $artifactRoot 'SaruMon-win-x64.zip'
     $temporaryZip = Join-Path $artifactRoot ('.SaruMon-' + [Guid]::NewGuid().ToString('N') + '.zip')
     try {
-        Compress-Archive -LiteralPath @($executable, (Join-Path $repoRoot 'README.md')) -DestinationPath $temporaryZip -CompressionLevel Optimal
+        Compress-Archive -LiteralPath @($executable, (Join-Path $repoRoot 'README.md'), (Join-Path $repoRoot 'docs')) -DestinationPath $temporaryZip -CompressionLevel Optimal
         Move-Item -LiteralPath $temporaryZip -Destination $zipPath -Force
     }
     finally {

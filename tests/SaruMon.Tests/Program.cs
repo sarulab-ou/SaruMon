@@ -29,7 +29,7 @@ internal static class Program
         }
         try
         {
-            var count = TrafficTests.Run() + UpdateTests.Run() + SingleInstanceTests.Run();
+            var count = TrafficTests.Run() + UpdateTests.Run() + SingleInstanceTests.Run() + InstallationTests.Run();
             Console.WriteLine($"PASS: {count} tests");
             return 0;
         }

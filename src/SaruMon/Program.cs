@@ -14,6 +14,7 @@ internal static class Program
             return;
         }
 
+        InstallationInfo.RefreshVersion();
         using var window = new MainForm(args.Contains("--tray", StringComparer.OrdinalIgnoreCase));
         _ = window.Handle;
         instance.StartListening(() =>

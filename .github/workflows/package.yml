@@ -1,0 +1,68 @@
+name: Package
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Test and publish Windows application
+        shell: pwsh
+        run: ./scripts/build.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portable-payload
+          path: |
+            artifacts/SaruMon-win-x64.zip
+            artifacts/SaruMon-win-x64.zip.sha256
+          if-no-files-found: error
+
+  installer:
+    needs: windows
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: portable-payload
+          path: artifacts
+      - name: Install NSIS build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends nsis=3.09-4ubuntu1 nsis-common=3.09-4ubuntu1
+      - name: Compile Windows installer
+        shell: pwsh
+        env:
+          CI: 'true'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [xml]$project = Get-Content src/SaruMon/SaruMon.csproj -Raw
+          $version = [string]$project.Project.PropertyGroup.Version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid application version.' }
+          $archive = Join-Path $PWD 'artifacts/SaruMon-win-x64.zip'
+          $expectedHash = (Get-Content "$archive.sha256" -Raw).Split(' ')[0]
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $expectedHash) { throw 'Payload checksum mismatch.' }
+          $payload = Join-Path $PWD 'artifacts/publish/win-x64'
+          Expand-Archive -LiteralPath $archive -DestinationPath $payload
+          $setup = Join-Path $PWD "artifacts/SaruMon-$version-Setup-x64.exe"
+          & makensis -V3 -WX "-DPRODUCT_VERSION=$version" "-DPAYLOAD_DIR=$payload" "-DOUTPUT_FILE=$setup" installer/SaruMon.nsi
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS compilation failed.' }
+          $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText((Join-Path $PWD "artifacts/SaruMon-$version-SHA256SUMS.txt"), "$hash  SaruMon-$version-Setup-x64.exe`n", [Text.UTF8Encoding]::new($false))
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SaruMon-win-x64
+          path: |
+            artifacts/SaruMon-win-x64.zip
+            artifacts/SaruMon-win-x64.zip.sha256
+            artifacts/SaruMon-*-Setup-x64.exe
+            artifacts/SaruMon-*-SHA256SUMS.txt
+          if-no-files-found: error
