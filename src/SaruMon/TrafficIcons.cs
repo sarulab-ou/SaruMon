@@ -1,5 +1,4 @@
 using System.Drawing.Drawing2D;
-using System.Runtime.InteropServices;
 
 namespace SaruMon;
 
@@ -99,9 +98,7 @@ internal sealed class TrafficIcons : IDisposable
                 g.FillRectangle(red, size - 1 - laneWidth, size - 1 - send, laneWidth, send);
             }
         }
-        var handle = bitmap.GetHicon();
-        try { using var borrowed = Icon.FromHandle(handle); return (Icon)borrowed.Clone(); }
-        finally { DestroyIcon(handle); }
+        return TrayIconImage.FromBitmap(bitmap);
     }
 
     private static Pen CreateStroke(Color color) => new(color, 2f)
@@ -120,8 +117,4 @@ internal sealed class TrafficIcons : IDisposable
     }
 
     private sealed record BarIcon(int Receive, int Send, bool Offline, Icon Icon);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool DestroyIcon(nint handle);
 }

@@ -15,7 +15,10 @@ internal sealed class MainForm : Form
     private readonly TcpTrafficMeter tcpTrafficMeter = new();
     private readonly Stopwatch clock = Stopwatch.StartNew();
     private readonly TrafficIcons icons = new(SystemInformation.SmallIconSize.Width);
+    private readonly CpuUsageIcons cpuIcons = new(SystemInformation.SmallIconSize.Width);
+    private readonly CpuUsageMeter cpuMeter = new();
     private readonly NotifyIcon tray;
+    private readonly NotifyIcon cpuTray;
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 1000 };
     private readonly ComboBox adapter = new() { DropDownStyle = ComboBoxStyle.DropDownList, MaxDropDownItems = 12, Dock = DockStyle.Fill, AccessibleName = "監視するインタフェース" };
     private readonly Label adapterDetail = new() { Dock = DockStyle.Fill, AutoEllipsis = true, ForeColor = Color.FromArgb(104, 116, 134) };
@@ -180,7 +183,15 @@ internal sealed class MainForm : Form
         trayMenu.Items.Add(new ToolStripSeparator());
         trayMenu.Items.Add("終了", null, (_, _) => RequestExit());
         tray = new NotifyIcon { Icon = icons.Idle, Text = "SaruMon", ContextMenuStrip = trayMenu, Visible = true };
+        cpuTray = new NotifyIcon
+        {
+            Icon = cpuIcons.GetIcon(null),
+            Text = "SaruMon · CPU 使用率を計測中",
+            ContextMenuStrip = trayMenu,
+            Visible = true
+        };
         tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) ShowFromTray(); };
+        cpuTray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) ShowFromTray(); };
         unicastOnly.CheckedChanged += (_, _) => SetUnicastOnlyIndicator(unicastOnly.Checked);
         unicastOnlyMenu.CheckedChanged += (_, _) => SetUnicastOnlyIndicator(unicastOnlyMenu.Checked);
         tcpIndicator.CheckedChanged += (_, _) => SetTcpActivityIndicator(tcpIndicator.Checked);
@@ -189,7 +200,11 @@ internal sealed class MainForm : Form
         tcpOnlyMenu.Click += async (_, _) => await SetTcpOnlyModeAsync(!tcpOnlyMode);
         adapter.SelectedIndexChanged += (_, _) => SelectAdapter();
         RefreshAdapters();
-        timer.Tick += (_, _) => Poll();
+        timer.Tick += (_, _) =>
+        {
+            Poll();
+            UpdateCpuIndicator();
+        };
         timer.Start();
         Poll();
         Resize += (_, _) => { if (WindowState == FormWindowState.Minimized) Hide(); };
@@ -266,6 +281,15 @@ internal sealed class MainForm : Form
         else if (latestTcpActivity.HasValue)
             ResetTcpIndicator();
         RenderTraffic(addGraphSample: true);
+    }
+
+    private void UpdateCpuIndicator()
+    {
+        var percentage = cpuMeter.ReadPercentage();
+        var icon = cpuIcons.GetIcon(percentage);
+        if (!ReferenceEquals(cpuTray.Icon, icon)) cpuTray.Icon = icon;
+        var tooltip = percentage is int value ? $"SaruMon · CPU 使用率 {value}%" : "SaruMon · CPU 使用率を取得できません";
+        if (cpuTray.Text != tooltip) cpuTray.Text = tooltip;
     }
 
     private void RenderTraffic(bool addGraphSample)
@@ -426,7 +450,7 @@ internal sealed class MainForm : Form
     }
 
     private void ShowTrayHelp() => MessageBox.Show(this,
-        "1. タスクバー右端の ∧（隠れているアイコン）を開きます。\n2. SaruMon の棒グラフのアイコンを、時計の近くの通知領域へドラッグします。\n\nWindows の「タスクバーの設定 → その他のシステム トレイ アイコン」からも表示を選べます。同名の項目が複数ある場合は、動いているアイコンを直接ドラッグしてください。\n\nスタートアップ登録は、ログイン時にアプリを起動する設定です。アイコンを常に表示する設定とは別です。",
+        "1. タスクバー右端の ∧（隠れているアイコン）を開きます。\n2. SaruMon の通信量アイコンと CPU アイコンを、時計の近くの通知領域へドラッグします。\n\nCPU アイコンの青い棒は PC 全体の使用率です。マウスを重ねるとパーセントを確認できます。\n\nWindows の「タスクバーの設定 → その他のシステム トレイ アイコン」からも表示を選べます。同名の項目が複数ある場合は、現在表示されているアイコンを直接ドラッグしてください。\n\nスタートアップ登録は、ログイン時にアプリを起動する設定です。アイコンを常に表示する設定とは別です。",
         "SaruMon アイコンを常に表示する", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
     private void ShowHelp() => MessageBox.Show(this,
@@ -473,8 +497,13 @@ internal sealed class MainForm : Form
         {
             timer.Stop(); timer.Dispose();
             tray.Visible = false;
-            tray.ContextMenuStrip?.Dispose();
+            cpuTray.Visible = false;
+            var trayMenu = tray.ContextMenuStrip;
+            cpuTray.Dispose();
             tray.Dispose();
+            trayMenu?.Dispose();
+            cpuMeter.Dispose();
+            cpuIcons.Dispose();
             tips.Dispose();
             icons.Dispose();
         }

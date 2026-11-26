@@ -12,7 +12,8 @@ internal static class TrafficIconsTests
         RatesUseIntegerPixelHeights();
         CacheRemainsBounded();
         DisposedCacheCannotReturnReleasedIcons();
-        return 4;
+        CpuBarFillsByPercentage();
+        return 5;
     }
 
     private static void BarsGrowFromOppositeEdges()
@@ -92,6 +93,25 @@ internal static class TrafficIconsTests
         try { _ = icons.GetIcon(true, 1, 1); }
         catch (ObjectDisposedException) { return; }
         throw new InvalidOperationException("A disposed cache returned an invalid native icon.");
+    }
+
+    private static void CpuBarFillsByPercentage()
+    {
+        using var icons = new CpuUsageIcons(16);
+        using var unavailable = icons.GetIcon(null).ToBitmap();
+        using var idle = icons.GetIcon(0).ToBitmap();
+        using var half = icons.GetIcon(50).ToBitmap();
+        using var full = icons.GetIcon(100).ToBitmap();
+        var blue = full.GetPixel(2, 12).ToArgb();
+        var track = idle.GetPixel(2, 12).ToArgb();
+        Assert(blue != track && idle.GetPixel(2, 12) != unavailable.GetPixel(2, 12),
+            "CPU load, idle, and unavailable states must be visually distinguishable.");
+        for (var x = 2; x < 14; x++)
+        {
+            Assert(half.GetPixel(x, 12).ToArgb() == (x < 8 ? blue : track), "Half CPU load must fill half the bar from the left.");
+            Assert(full.GetPixel(x, 12).ToArgb() == blue, "Full CPU load must fill the entire bar.");
+        }
+        Assert(ReferenceEquals(icons.GetIcon(50), icons.GetIcon(51)), "Equal bar widths must reuse the cached CPU icon.");
     }
 
     internal static void WritePreview(string outputPath)
