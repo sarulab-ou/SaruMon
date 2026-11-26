@@ -25,7 +25,10 @@ internal sealed class MainForm : Form
     private readonly ConnectionsView connections = new();
     private readonly UdpConnectionsView udpConnections = new();
     private readonly ToolTip tips = new();
+    private readonly CheckBox unicastOnly = new() { Text = "ユニキャスト通信だけで矢印を表示", AutoSize = true, Anchor = AnchorStyles.Left };
+    private readonly ToolStripMenuItem unicastOnlyMenu = new("ユニキャスト通信だけで矢印を表示") { CheckOnClick = true };
     private readonly bool startHidden;
+    private TrafficSample? latestSample;
     private bool refreshing;
     private bool exiting;
     private bool shuttingDown;
@@ -64,7 +67,7 @@ internal sealed class MainForm : Form
         var body = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24, 12, 24, 14), ColumnCount = 1, RowCount = 7 };
         foreach (var height in new[] { 64, 28, 40, 48 }) body.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
         body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        body.RowStyles.Add(new RowStyle(SizeType.Absolute, 37));
+        body.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
         body.RowStyles.Add(new RowStyle(SizeType.Absolute, 27));
 
         var header = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
@@ -110,9 +113,11 @@ internal sealed class MainForm : Form
         tabs.TabPages.AddRange([trafficPage, peersPage, detailPage]);
         body.Controls.Add(tabs, 0, 4);
 
-        var options = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
+        var options = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Margin = Padding.Empty };
         options.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         options.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 154));
+        options.RowStyles.Add(new RowStyle(SizeType.Absolute, 35));
+        options.RowStyles.Add(new RowStyle(SizeType.Absolute, 35));
         var startup = new CheckBox { Text = "Windows ログイン時に起動", AutoSize = true, Anchor = AnchorStyles.Left };
         try { startup.Checked = AppSettings.StartWithWindows; }
         catch (System.Security.SecurityException) { startup.Enabled = false; }
@@ -129,6 +134,11 @@ internal sealed class MainForm : Form
         hide.Click += (_, _) => HideToTray();
         options.Controls.Add(startup, 0, 0);
         options.Controls.Add(hide, 1, 0);
+        unicastOnly.Checked = settings.UnicastOnlyIndicator;
+        unicastOnlyMenu.Checked = settings.UnicastOnlyIndicator;
+        tips.SetToolTip(unicastOnly, "ブロードキャスト・マルチキャストを矢印の判定から除きます。TCP・UDPとLAN内の個別通信は含みます。\n速度・合計・グラフは全通信のままです。管理者権限は不要です。");
+        options.Controls.Add(unicastOnly, 0, 1);
+        options.SetColumnSpan(unicastOnly, 2);
         body.Controls.Add(options, 0, 5);
         footer.Text = "0.5秒ごとに更新 · × を押しても監視を続けます";
         footer.Dock = DockStyle.Fill;
@@ -139,12 +149,15 @@ internal sealed class MainForm : Form
 
         var trayMenu = new ContextMenuStrip();
         trayMenu.Items.Add("SaruMon を開く", null, (_, _) => ShowFromTray());
+        trayMenu.Items.Add(unicastOnlyMenu);
         trayMenu.Items.Add("アイコンを常に表示するには", null, (_, _) => { ShowFromTray(); ShowTrayHelp(); });
         trayMenu.Items.Add("更新を確認…", null, (_, _) => { ShowFromTray(); OpenUpdates(); });
         trayMenu.Items.Add(new ToolStripSeparator());
         trayMenu.Items.Add("終了", null, (_, _) => RequestExit());
         tray = new NotifyIcon { Icon = icons.Idle, Text = "SaruMon", ContextMenuStrip = trayMenu, Visible = true };
         tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) ShowFromTray(); };
+        unicastOnly.CheckedChanged += (_, _) => SetUnicastOnlyIndicator(unicastOnly.Checked);
+        unicastOnlyMenu.CheckedChanged += (_, _) => SetUnicastOnlyIndicator(unicastOnlyMenu.Checked);
         adapter.SelectedIndexChanged += (_, _) => SelectAdapter();
         RefreshAdapters();
         timer.Tick += (_, _) => Poll();
@@ -217,26 +230,57 @@ internal sealed class MainForm : Form
         if (++tick % 10 == 0) RefreshAdapters();
         var selected = adapter.SelectedItem as AdapterChoice;
         var sample = selected == null ? null : sampler.Sample(TrafficNetwork.ReadCounters(selected.Id), clock.Elapsed);
-        var state = sample?.IsAvailable != true ? TrafficState.Offline :
-            sample.IsReceiving && sample.IsSending ? TrafficState.Both :
-            sample.IsReceiving ? TrafficState.Receiving : sample.IsSending ? TrafficState.Sending : TrafficState.Idle;
-        var status = state switch { TrafficState.Receiving => "受信中", TrafficState.Sending => "送信中", TrafficState.Both => "送受信中", TrafficState.Offline => "未接続", _ => "待機中" };
-        connection.Text = "● " + status;
-        connection.ForeColor = TrafficIcons.ColorFor(state);
+        latestSample = sample;
         receiveRate.Text = sample?.HasRate == true ? FormatBytes(sample.DownloadBytesPerSecond) + "/s" : "—";
         sendRate.Text = sample?.HasRate == true ? FormatBytes(sample.UploadBytesPerSecond) + "/s" : "—";
         receiveTotal.Text = "選択後の合計  " + FormatBytes(sample?.TotalReceivedBytes ?? 0);
         sendTotal.Text = "選択後の合計  " + FormatBytes(sample?.TotalSentBytes ?? 0);
         graph.Add(sample?.DownloadBytesPerSecond ?? 0, sample?.UploadBytesPerSecond ?? 0);
-        var trafficIcon = icons.GetIcon(sample?.IsAvailable == true,
-            sample?.HasRate == true ? sample.DownloadBytesPerSecond : 0,
-            sample?.HasRate == true ? sample.UploadBytesPerSecond : 0);
-        tray.Icon = trafficIcon;
-        Icon = trafficIcon;
-        var name = selected?.Interface?.Name ?? "未選択";
-        if (name.Length > 20) name = name[..19] + "…";
-        var tooltip = $"SaruMon · {name}\n↓ {receiveRate.Text}  ↑ {sendRate.Text}\n{status}";
-        tray.Text = tooltip.Length <= 63 ? tooltip : tooltip[..63];
+        RenderIndicator();
+    }
+
+    private void SetUnicastOnlyIndicator(bool enabled)
+    {
+        if (settings.UnicastOnlyIndicator == enabled) return;
+        settings.UnicastOnlyIndicator = enabled;
+        unicastOnly.Checked = enabled;
+        unicastOnlyMenu.Checked = enabled;
+        // Reuse the last interval: switching display mode neither polls nor resets totals.
+        RenderIndicator();
+        try { settings.Save(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            footer.Text = "矢印の設定を保存できませんでした。次回起動時は再設定してください。";
+        }
+    }
+
+    private void RenderIndicator()
+    {
+        var sample = latestSample;
+        var onlyUnicast = settings.UnicastOnlyIndicator;
+        var receiving = onlyUnicast ? sample?.IsUnicastReceiving == true : sample?.IsReceiving == true;
+        var sending = onlyUnicast ? sample?.IsUnicastSending == true : sample?.IsSending == true;
+        var state = sample?.IsAvailable != true ? TrafficState.Offline :
+            receiving && sending ? TrafficState.Both :
+            receiving ? TrafficState.Receiving : sending ? TrafficState.Sending : TrafficState.Idle;
+        var status = state switch { TrafficState.Receiving => "受信中", TrafficState.Sending => "送信中", TrafficState.Both => "送受信中", TrafficState.Offline => "未接続", _ => "待機中" };
+        if (onlyUnicast && sample?.IsAvailable == true)
+        {
+            if (sample.ReceivedUnicastDelta is null && sample.SentUnicastDelta is null) status = "判定不可";
+            else if (sample.ReceivedUnicastDelta is null || sample.SentUnicastDelta is null) status += "（一部判定不可）";
+        }
+        connection.Text = "● " + (onlyUnicast ? "ユニキャスト " : "") + status;
+        connection.ForeColor = TrafficIcons.ColorFor(state);
+        var trafficIcon = icons.GetIcon(sample?.IsAvailable == true, receiving ? 1 : 0, sending ? 1 : 0);
+        // Icons are cached. Avoid repeated shell/window notifications while the state is unchanged.
+        if (!ReferenceEquals(tray.Icon, trafficIcon)) tray.Icon = trafficIcon;
+        if (!ReferenceEquals(Icon, trafficIcon)) Icon = trafficIcon;
+        var name = (adapter.SelectedItem as AdapterChoice)?.Interface?.Name ?? "未選択";
+        if (name.Length > 10) name = name[..9] + "…";
+        var mode = onlyUnicast ? "ユニキャスト" : "全通信";
+        var tooltip = $"SaruMon · {name}\n矢印: {mode} · {status}\n全体 ↓ {receiveRate.Text} ↑ {sendRate.Text}";
+        if (tooltip.Length > 63) tooltip = tooltip[..63];
+        if (tray.Text != tooltip) tray.Text = tooltip;
     }
 
     public void ShowFromTray()
@@ -266,7 +310,7 @@ internal sealed class MainForm : Form
         "SaruMon アイコンを常に表示する", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
     private void ShowHelp() => MessageBox.Show(this,
-        "1. 監視するインタフェースを選択します。\n2. 通知領域に格納すると、白地の矢印で通信を確認できます。\n\n下り（受信）: 緑の下矢印 / 上り（送信）: 赤の上矢印\n色の濃さは固定です。0.5秒ごとに、通信があった方向の矢印を表示します。\n通信がない方向の矢印は消え、未接続はオレンジの × です。\n速度の単位はバイト/秒です（1 KiB = 1,024 B）。\n合計は現在のインタフェースを選択してからの通信量です。\n\n「接続先（TCP）」タブで IP・宛先ポート・接続状態を確認できます。\n「相手ごとの通信量」で監視を開始すると、相手 IP ごとの上り・下り合計を記録します。\n「ログを保存」で、相手 IP・名前・上り合計・下り合計・接続回数・開始時刻・最終時刻を CSV に保存できます。\n接続回数は監視中に観測した分です。監視前からの接続は回数に含めません。\n開始・最終時刻は、その相手を最初・最後に観測した時刻です。\n「逆引き」をオンにすると、DNS で取得したホスト名も表示します。\nホスト名は閲覧サイト名とは限りません。\n\n「UDP 送信先」で「開始」を押すと、管理者承認後に UDP 送信を記録します。\n「保存」で、開始時刻・最終時刻・送信イベント数・累積送信量を CSV に保存できます。\nUDP の開始・最終時刻は、最初・最後に送信を観測した時刻です。\n監視開始前の通信は含みません。停止後も保存でき、再開・インタフェース変更で記録をクリアします。\n\nアイコンが隠れている場合は、タスクバー右端の ∧ を開き、SaruMon を時計の近くへドラッグしてください。\nアイコンのクリック、または SaruMon の再起動で画面が開きます。\n終了するには、メニューの「終了」を選びます。\n\n更新は「ヘルプ → 更新を確認」から実行できます。",
+        "1. 監視するインタフェースを選択します。\n2. 通知領域に格納すると、白地の矢印で通信を確認できます。\n\n下り（受信）: 緑の下矢印 / 上り（送信）: 赤の上矢印\n色の濃さは固定です。0.5秒ごとに、通信があった方向の矢印を表示します。\n通信がない方向の矢印は消え、未接続はオレンジの × です。\n「ユニキャスト通信だけで矢印を表示」をオンにすると、ブロードキャスト・マルチキャストでは矢印を表示しません。\n管理者権限は不要で、TCP・UDPとLAN内の個別通信を含みます。設定は次回起動時も引き継ぎます。\n速度・合計・グラフはインタフェース全体の値です。\n速度の単位はバイト/秒です（1 KiB = 1,024 B）。\n合計は現在のインタフェースを選択してからの通信量です。\n\n「接続先（TCP）」タブで IP・宛先ポート・接続状態を確認できます。\n「相手ごとの通信量」で監視を開始すると、相手 IP ごとの上り・下り合計を記録します。\n「ログを保存」で、相手 IP・名前・上り合計・下り合計・接続回数・開始時刻・最終時刻を CSV に保存できます。\n接続回数は監視中に観測した分です。監視前からの接続は回数に含めません。\n開始・最終時刻は、その相手を最初・最後に観測した時刻です。\n「逆引き」をオンにすると、DNS で取得したホスト名も表示します。\nホスト名は閲覧サイト名とは限りません。\n\n「UDP 送信先」で「開始」を押すと、管理者承認後に UDP 送信を記録します。\n「保存」で、開始時刻・最終時刻・送信イベント数・累積送信量を CSV に保存できます。\nUDP の開始・最終時刻は、最初・最後に送信を観測した時刻です。\n監視開始前の通信は含みません。停止後も保存でき、再開・インタフェース変更で記録をクリアします。\n\nアイコンが隠れている場合は、タスクバー右端の ∧ を開き、SaruMon を時計の近くへドラッグしてください。\nアイコンのクリック、または SaruMon の再起動で画面が開きます。\n終了するには、メニューの「終了」を選びます。\n\n更新は「ヘルプ → 更新を確認」から実行できます。",
         "SaruMon の使い方", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
     public async void RequestExit()

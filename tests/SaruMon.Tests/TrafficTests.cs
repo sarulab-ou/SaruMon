@@ -14,12 +14,20 @@ internal static class TrafficTests
         ResetClearsTotals();
         LargeTotalsDoNotOverflow();
         RejectNegativeCounters();
-        return 8;
+        UnicastFirstSampleAndNonUnicastTraffic();
+        UnicastDirectionsAreIndependent();
+        UnicastCounterResetsAreIndependent();
+        UnicastMissingCountersRecoverWithoutSpikes();
+        UnicastDisconnectAndReconnect();
+        UnicastInterfaceAndExplicitReset();
+        UnicastByteResetAndInvalidInterval();
+        LargeUnicastCountersDoNotOverflow();
+        return 16;
     }
 
     private static TrafficSample Sample(TrafficSampler sampler, double time, long received, long sent,
-        string id = "adapter-a", bool available = true) =>
-        sampler.Sample(new TrafficCounterReading(id, available, received, sent), TimeSpan.FromSeconds(time));
+        string id = "adapter-a", bool available = true, long? unicastReceived = null, long? unicastSent = null) =>
+        sampler.Sample(new TrafficCounterReading(id, available, received, sent, unicastReceived, unicastSent), TimeSpan.FromSeconds(time));
 
     private static void FirstSampleAndRates()
     {
@@ -124,6 +132,147 @@ internal static class TrafficTests
         try { Sample(new TrafficSampler(), 0, -1, 0); }
         catch (ArgumentOutOfRangeException) { return; }
         throw new InvalidOperationException("Negative available counters must be rejected.");
+    }
+
+    private static void UnicastFirstSampleAndNonUnicastTraffic()
+    {
+        var sampler = new TrafficSampler();
+        var baseline = Sample(sampler, 0, 1000, 2000, unicastReceived: 100, unicastSent: 200);
+        Expect(baseline.ReceivedUnicastDelta == 0 && baseline.SentUnicastDelta == 0
+            && !baseline.IsUnicastReceiving && !baseline.IsUnicastSending,
+            "First unicast counters must be supported but must not flash for historical packets.");
+        var nonUnicast = Sample(sampler, .5, 1200, 2050, unicastReceived: 100, unicastSent: 200);
+        Expect(nonUnicast.IsReceiving && nonUnicast.IsSending && !nonUnicast.IsUnicastReceiving && !nonUnicast.IsUnicastSending,
+            "Non-unicast byte growth must not light unicast arrows.");
+        Equal(400, nonUnicast.DownloadBytesPerSecond, "Unicast filtering must preserve all-traffic byte rates.");
+        Expect(nonUnicast.TotalReceivedBytes == 200 && nonUnicast.TotalSentBytes == 50,
+            "Unicast filtering must preserve all-traffic totals.");
+        var legacy = Sample(new TrafficSampler(), 0, 100, 100);
+        Expect(legacy.ReceivedUnicastDelta is null && legacy.SentUnicastDelta is null,
+            "Readings without optional counters must report unicast as unavailable.");
+    }
+
+    private static void UnicastDirectionsAreIndependent()
+    {
+        var sampler = new TrafficSampler();
+        Sample(sampler, 0, 100, 100, unicastReceived: 10, unicastSent: 20);
+        var received = Sample(sampler, .5, 110, 100, unicastReceived: 11, unicastSent: 20);
+        Expect(received.ReceivedUnicastDelta == 1 && received.SentUnicastDelta == 0
+            && received.IsUnicastReceiving && !received.IsUnicastSending,
+            "Even one received unicast packet must light only the receive arrow.");
+        var sent = Sample(sampler, 1, 110, 120, unicastReceived: 11, unicastSent: 23);
+        Expect(sent.ReceivedUnicastDelta == 0 && sent.SentUnicastDelta == 3
+            && !sent.IsUnicastReceiving && sent.IsUnicastSending,
+            "Sent unicast packets must light only the send arrow.");
+        var both = Sample(sampler, 1.5, 120, 140, unicastReceived: 12, unicastSent: 24);
+        Expect(both.IsUnicastReceiving && both.IsUnicastSending, "Bidirectional unicast must light both arrows.");
+        var idle = Sample(sampler, 2, 120, 140, unicastReceived: 12, unicastSent: 24);
+        Expect(idle.ReceivedUnicastDelta == 0 && idle.SentUnicastDelta == 0
+            && !idle.IsUnicastReceiving && !idle.IsUnicastSending, "Idle unicast arrows must turn off.");
+    }
+
+    private static void UnicastCounterResetsAreIndependent()
+    {
+        var sampler = new TrafficSampler();
+        Sample(sampler, 0, 100, 200, unicastReceived: 10, unicastSent: 20);
+        Sample(sampler, .5, 200, 300, unicastReceived: 11, unicastSent: 22);
+        var receiveReset = Sample(sampler, 1, 300, 400, unicastReceived: 0, unicastSent: 25);
+        Expect(receiveReset.ReceivedUnicastDelta == 0 && receiveReset.SentUnicastDelta == 3 && receiveReset.HasRate,
+            "A receive unicast reset must not hide valid send activity or byte rates.");
+        var resumed = Sample(sampler, 1.5, 400, 500, unicastReceived: 1, unicastSent: 26);
+        Expect(resumed.ReceivedUnicastDelta == 1 && resumed.SentUnicastDelta == 1,
+            "Unicast observation must resume immediately after its counter reset.");
+        var sendReset = Sample(sampler, 2, 500, 600, unicastReceived: 2, unicastSent: 0);
+        Expect(sendReset.ReceivedUnicastDelta == 1 && sendReset.SentUnicastDelta == 0
+            && sendReset.TotalReceivedBytes == 400 && sendReset.TotalSentBytes == 400,
+            "A send unicast reset must preserve receive activity and the byte totals.");
+    }
+
+    private static void UnicastMissingCountersRecoverWithoutSpikes()
+    {
+        var sampler = new TrafficSampler();
+        Sample(sampler, 0, 100, 100, unicastSent: 50);
+        var acquired = Sample(sampler, .5, 200, 200, unicastReceived: 100, unicastSent: 51);
+        Expect(acquired.ReceivedUnicastDelta == 0 && acquired.SentUnicastDelta == 1,
+            "A newly available counter needs a baseline without suppressing the other direction.");
+        var missing = Sample(sampler, 1, 300, 300, unicastReceived: 102);
+        Expect(missing.ReceivedUnicastDelta == 2 && missing.SentUnicastDelta is null && !missing.IsUnicastSending,
+            "A missing unicast counter must not fall back to all-traffic activity.");
+        var invalid = Sample(sampler, 1.5, 400, 400, unicastReceived: -1, unicastSent: 60);
+        Expect(invalid.ReceivedUnicastDelta is null && invalid.SentUnicastDelta == 0 && invalid.HasRate,
+            "An invalid optional counter must not break byte sampling or count an unobserved interval.");
+        var recovered = Sample(sampler, 2, 500, 500, unicastReceived: 500, unicastSent: 62);
+        Expect(recovered.ReceivedUnicastDelta == 0 && recovered.SentUnicastDelta == 2
+            && recovered.TotalReceivedBytes == 400 && recovered.TotalSentBytes == 400,
+            "Recovered counters must rebaseline independently and preserve all byte totals.");
+        var next = Sample(sampler, 2.5, 600, 600, unicastReceived: 501, unicastSent: 63);
+        Expect(next.ReceivedUnicastDelta == 1 && next.SentUnicastDelta == 1, "Both counters must resume after recovery.");
+    }
+
+    private static void UnicastDisconnectAndReconnect()
+    {
+        var sampler = new TrafficSampler();
+        Sample(sampler, 0, 100, 200, unicastReceived: 10, unicastSent: 20);
+        Sample(sampler, .5, 200, 300, unicastReceived: 11, unicastSent: 21);
+        var disconnected = Sample(sampler, 1, 0, 0, available: false, unicastReceived: 100, unicastSent: 200);
+        Expect(disconnected.ReceivedUnicastDelta is null && disconnected.SentUnicastDelta is null
+            && !disconnected.IsUnicastReceiving && !disconnected.IsUnicastSending,
+            "Disconnected adapters must not report optional packet activity.");
+        var reconnected = Sample(sampler, 1.5, 1000, 2000, unicastReceived: 100, unicastSent: 200);
+        Expect(reconnected.ReceivedUnicastDelta == 0 && reconnected.SentUnicastDelta == 0,
+            "Reconnect must not flash for packets accumulated while disconnected.");
+        var resumed = Sample(sampler, 2, 1100, 2100, unicastReceived: 101, unicastSent: 201);
+        Expect(resumed.ReceivedUnicastDelta == 1 && resumed.SentUnicastDelta == 1
+            && resumed.TotalReceivedBytes == 200 && resumed.TotalSentBytes == 200,
+            "Reconnect must resume packet observation without resetting observed byte totals.");
+    }
+
+    private static void UnicastInterfaceAndExplicitReset()
+    {
+        var sampler = new TrafficSampler();
+        Sample(sampler, 0, 100, 100, unicastReceived: 10, unicastSent: 10);
+        Sample(sampler, .5, 200, 200, unicastReceived: 20, unicastSent: 20);
+        var switched = Sample(sampler, 1, 5000, 5000, "adapter-b", unicastReceived: 500, unicastSent: 500);
+        Expect(switched.ReceivedUnicastDelta == 0 && switched.SentUnicastDelta == 0 && switched.TotalReceivedBytes == 0,
+            "An interface change must rebaseline unicast without borrowing the previous adapter's counters.");
+        var next = Sample(sampler, 1.5, 5100, 5200, "adapter-b", unicastReceived: 501, unicastSent: 502);
+        Expect(next.ReceivedUnicastDelta == 1 && next.SentUnicastDelta == 2, "The selected interface's deltas must be used.");
+        sampler.Reset();
+        var reset = Sample(sampler, 2, 6000, 6000, "adapter-b", unicastReceived: 600, unicastSent: 600);
+        Expect(reset.ReceivedUnicastDelta == 0 && reset.SentUnicastDelta == 0 && reset.TotalReceivedBytes == 0,
+            "An explicit reset must clear the packet baseline as well as byte totals.");
+    }
+
+    private static void UnicastByteResetAndInvalidInterval()
+    {
+        var sampler = new TrafficSampler();
+        Sample(sampler, 0, 100, 100, unicastReceived: 10, unicastSent: 10);
+        Sample(sampler, .5, 200, 200, unicastReceived: 20, unicastSent: 20);
+        var reset = Sample(sampler, 1, 0, 300, unicastReceived: 500, unicastSent: 500);
+        Expect(!reset.HasRate && reset.ReceivedUnicastDelta == 0 && reset.SentUnicastDelta == 0,
+            "A byte-counter restart must rebaseline packet observation too.");
+        var repeated = Sample(sampler, 1, 100, 400, unicastReceived: 600, unicastSent: 600);
+        Expect(repeated.ReceivedUnicastDelta == 0 && repeated.SentUnicastDelta == 0,
+            "Repeated timestamps must not produce packet activity.");
+        var backwards = Sample(sampler, .5, 200, 500, unicastReceived: 700, unicastSent: 700);
+        Expect(backwards.ReceivedUnicastDelta == 0 && backwards.SentUnicastDelta == 0,
+            "Backward timestamps must rebaseline packet observation.");
+        var resumed = Sample(sampler, 1, 300, 600, unicastReceived: 701, unicastSent: 702);
+        Expect(resumed.ReceivedUnicastDelta == 1 && resumed.SentUnicastDelta == 2 && resumed.TotalReceivedBytes == 200,
+            "Packet and byte sampling must recover after invalid intervals.");
+    }
+
+    private static void LargeUnicastCountersDoNotOverflow()
+    {
+        var sampler = new TrafficSampler();
+        Sample(sampler, 0, 0, 0, unicastReceived: 0, unicastSent: 0);
+        var maximum = Sample(sampler, .5, 10, 10, unicastReceived: long.MaxValue, unicastSent: long.MaxValue);
+        Expect(maximum.ReceivedUnicastDelta == long.MaxValue && maximum.SentUnicastDelta == long.MaxValue,
+            "Large unicast counters must preserve a nonnegative delta.");
+        var reset = Sample(sampler, 1, 20, 20, unicastReceived: 0, unicastSent: 0);
+        Expect(reset.ReceivedUnicastDelta == 0 && reset.SentUnicastDelta == 0, "Counter wrap must rebaseline without a negative spike.");
+        var next = Sample(sampler, 1.5, 30, 30, unicastReceived: 1, unicastSent: 1);
+        Expect(next.ReceivedUnicastDelta == 1 && next.SentUnicastDelta == 1, "Packet sampling must resume after wrap.");
     }
 
     private static void Equal(double expected, double actual, string message) =>

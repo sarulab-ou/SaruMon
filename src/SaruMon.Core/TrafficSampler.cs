@@ -5,7 +5,9 @@ public sealed record TrafficCounterReading(
     string InterfaceId,
     bool IsAvailable,
     long BytesReceived,
-    long BytesSent);
+    long BytesSent,
+    long? UnicastPacketsReceived = null,
+    long? UnicastPacketsSent = null);
 
 public sealed record TrafficSample(
     string InterfaceId,
@@ -16,10 +18,14 @@ public sealed record TrafficSample(
     long ReceivedDelta,
     long SentDelta,
     long TotalReceivedBytes,
-    long TotalSentBytes)
+    long TotalSentBytes,
+    long? ReceivedUnicastDelta = null,
+    long? SentUnicastDelta = null)
 {
     public bool IsReceiving => ReceivedDelta > 0;
     public bool IsSending => SentDelta > 0;
+    public bool IsUnicastReceiving => ReceivedUnicastDelta > 0;
+    public bool IsUnicastSending => SentUnicastDelta > 0;
 }
 
 /// <summary>
@@ -81,12 +87,26 @@ public sealed class TrafficSampler
 
         return new TrafficSample(reading.InterfaceId, true, true,
             received / elapsed.TotalSeconds, sent / elapsed.TotalSeconds,
-            received, sent, _totalReceived, _totalSent);
+            received, sent, _totalReceived, _totalSent,
+            UnicastDelta(reading.UnicastPacketsReceived, previous.UnicastPacketsReceived),
+            UnicastDelta(reading.UnicastPacketsSent, previous.UnicastPacketsSent));
     }
 
     private TrafficSample Empty(TrafficCounterReading reading, bool hasRate) =>
         new(reading.InterfaceId, reading.IsAvailable, hasRate, 0, 0, 0, 0,
-            _totalReceived, _totalSent);
+            _totalReceived, _totalSent,
+            reading.IsAvailable ? UnicastDelta(reading.UnicastPacketsReceived, null) : null,
+            reading.IsAvailable ? UnicastDelta(reading.UnicastPacketsSent, null) : null);
+
+    // Null means this direction's counter is unavailable. A valid counter without
+    // a baseline (or after a reset) is supported but silent until the next sample.
+    // Each direction recovers independently, without changing the byte totals.
+    private static long? UnicastDelta(long? current, long? previous)
+    {
+        if (current is null or < 0) return null;
+        if (previous is null or < 0 || current < previous) return 0;
+        return current.Value - previous.Value;
+    }
 
     private static long SaturatingAdd(long left, long right) =>
         left > long.MaxValue - right ? long.MaxValue : left + right;

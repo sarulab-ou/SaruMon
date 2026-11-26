@@ -15,7 +15,7 @@ public sealed record TrafficInterface(
     public override string ToString() => $"{Name} ({(IsUp ? "接続中" : "未接続")})";
 }
 
-/// <summary>Reads adapter byte counters without packet capture or administrator privileges.</summary>
+/// <summary>Reads adapter byte and unicast packet counters without capture or administrator privileges.</summary>
 public static class TrafficNetwork
 {
     public static IReadOnlyList<TrafficInterface> GetInterfaces()
@@ -41,7 +41,10 @@ public static class TrafficNetwork
             var counters = adapter.GetIPStatistics();
             if (counters.BytesReceived < 0 || counters.BytesSent < 0)
                 return Unavailable(interfaceId);
-            return new TrafficCounterReading(interfaceId, true, counters.BytesReceived, counters.BytesSent);
+            // All four fields come from this one statistics snapshot. Reading
+            // unicast activity adds no capture, background worker, or OS query.
+            return new TrafficCounterReading(interfaceId, true, counters.BytesReceived, counters.BytesSent,
+                ReadUnicastPackets(counters, received: true), ReadUnicastPackets(counters, received: false));
         }
         catch (NetworkInformationException)
         {
@@ -55,6 +58,21 @@ public static class TrafficNetwork
     }
 
     private static TrafficCounterReading Unavailable(string interfaceId) => new(interfaceId, false, 0, 0);
+
+    private static long? ReadUnicastPackets(IPInterfaceStatistics counters, bool received)
+    {
+        try
+        {
+            var value = received ? counters.UnicastPacketsReceived : counters.UnicastPacketsSent;
+            return value >= 0 ? value : null;
+        }
+        catch (Exception ex) when (ex is NetworkInformationException or InvalidOperationException or NotSupportedException)
+        {
+            // An unavailable optional counter must not suppress the adapter's
+            // total byte rates or be replaced with non-unicast activity.
+            return null;
+        }
+    }
 
     private static TrafficInterface ToInterface(NetworkInterface adapter)
     {

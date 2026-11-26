@@ -55,8 +55,8 @@ dotnet run --project tests/SaruMon.Tests/SaruMon.Tests.csproj --configuration Re
 | `artifacts/publish/win-x64/SaruMon.exe` | 配布用の単一 EXE |
 | `artifacts/SaruMon-win-x64.zip` | ポータブル版・アプリ内更新用 |
 | `artifacts/SaruMon-win-x64.zip.sha256` | アプリ内更新で照合するハッシュ |
-| `artifacts/SaruMon-0.1.5-Setup-x64.exe` | v0.1.5 インストーラー |
-| `artifacts/SaruMon-0.1.5-SHA256SUMS.txt` | v0.1.5 インストーラーの SHA-256 |
+| `artifacts/SaruMon-0.1.6-Setup-x64.exe` | v0.1.6 インストーラー |
+| `artifacts/SaruMon-0.1.6-SHA256SUMS.txt` | v0.1.6 インストーラーの SHA-256 |
 
 ビルド成果物は Git に追加しません。公開手順は [releasing.md](releasing.md) を参照してください。
 
@@ -67,14 +67,22 @@ dotnet run --project tests/SaruMon.Tests/SaruMon.Tests.csproj --configuration Re
 「Windows ログイン時に起動」コンポーネントは既定で選択され、現在のユーザーのログイン時にインストール先の `SaruMon.exe --tray` を実行するよう登録します。対話形式ではチェックを外せます。サイレントインストールで登録を無効にする場合は `/NoStartup` を指定します。
 
 ```powershell
-Start-Process -FilePath '.\artifacts\SaruMon-0.1.5-Setup-x64.exe' -ArgumentList '/S', '/NoStartup' -WindowStyle Hidden -Wait
+Start-Process -FilePath '.\artifacts\SaruMon-0.1.6-Setup-x64.exe' -ArgumentList '/S', '/NoStartup' -WindowStyle Hidden -Wait
 ```
 
 ZIP 版はアプリ内で自動起動を有効にします。インストーラーの自動起動登録は、Windows の通知領域でアイコンを常時表示する設定を変更しません。表示位置は起動後に利用者が調整します。
 
 ## 通信アイコン
 
-通知領域では白地を使い、受信を緑の下向き矢印、送信を赤の上向き矢印で表します。矢印は太く、色と濃さを固定します。0.5 秒ごとの更新で、直前の計測区間の通信量が正である方向だけ表示し、通信がない方向は描画しません。両方向とも通信がない場合は白地だけ、未接続はオレンジの × にします。通信量の差分計算とアイコン描画を変更する場合は、片方向・双方向・待機・未接続の各表示と、通信量が少なくても同じ色になることを確認します。
+通知領域では白地を使い、受信を緑の下向き矢印、送信を赤の上向き矢印で表します。矢印は太く、色と濃さを固定します。0.5 秒ごとの更新で、直前の計測区間に表示対象の通信があった方向だけ表示します。両方向とも対象の通信がない場合は白地だけ、未接続はオレンジの × にします。
+
+`AppSettings.UnicastOnlyIndicator` は既定で `false` です。ウィンドウ下部のチェックボックスと通知領域の右クリックメニューで同期して切り替えます。オフでは送受信バイト数の差分、オンではユニキャスト送受信パケット数の差分が正かどうかを方向ごとに判定します。設定の切り替えは表示対象だけを変え、速度・合計・グラフの値や集計開始点は変えません。ユニキャストのカウンターを取得できない場合は判定できないことを表示し、全体の通信量で代用しません。
+
+`TrafficNetwork.ReadCounters` は、同じ `GetIPStatistics()` の結果からバイト数と `UnicastPacketsReceived` / `UnicastPacketsSent` を取得します。ポーリングは既存の 500 ミリ秒タイマーを共有し、ユニキャスト表示のための ETW、補助プロセス、DNS 問い合わせ、ログ生成は追加しません。パケット数から方向の活動だけを判定するため、パケットの内容は取得しません。TCP・UDP や LAN・インターネットの区別はしません。
+
+[.NET 10 の Windows 実装](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Net.NetworkInformation/src/System/Net/NetworkInformation/SystemIPInterfaceStatistics.cs)は、統計オブジェクトの作成時に `GetIfEntry2` を一度呼び、バイト数とユニキャストパケット数の各プロパティで同じ取得済み構造体のフィールドを読み取ります。そのため、同じオブジェクトからこれらの値を読む際に OS への追加照会は発生しません。
+
+変更時は、バイト数だけ増えてユニキャストパケット数が増えない場合、片方向・双方向、待機・未接続を確認します。初回、カウンターのリセット、取得できないカウンターの復帰、インタフェース切り替えで過去の累積値による矢印が出ないこと、通常のバイト集計が保持されることも確認します。設定を切り替えた際の表示と再起動時の設定保持を確認し、負荷を測定していない場合は CPU 使用率などの数値を推定で記載しないでください。
 
 ## TCP 接続先と逆引き
 
