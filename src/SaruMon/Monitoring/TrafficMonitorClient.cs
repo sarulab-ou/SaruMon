@@ -21,6 +21,7 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
     private Task? readerTask;
     private IReadOnlyList<UdpFlowInfo> udpSnapshot = Array.Empty<UdpFlowInfo>();
     private IReadOnlyList<TcpPeerInfo> tcpSnapshot = Array.Empty<TcpPeerInfo>();
+    private TcpTrafficSnapshot? tcpTraffic;
     private string? error;
     private bool running;
     private bool disposed;
@@ -37,6 +38,7 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
     public bool IsRunning => Volatile.Read(ref running);
     public IReadOnlyList<UdpFlowInfo> UdpSnapshot => Volatile.Read(ref udpSnapshot);
     public IReadOnlyList<TcpPeerInfo> TcpSnapshot => Volatile.Read(ref tcpSnapshot);
+    public TcpTrafficSnapshot? TcpTraffic => Volatile.Read(ref tcpTraffic);
     public string? Error => Volatile.Read(ref error);
     public long DroppedEvents => Interlocked.Read(ref droppedEvents);
 
@@ -143,7 +145,13 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
                 {
                     if (message.Revision != revision) continue;
                     if (mode == MonitoringMode.Udp) Volatile.Write(ref udpSnapshot, Array.AsReadOnly(message.UdpFlows!));
-                    else Volatile.Write(ref tcpSnapshot, Array.AsReadOnly(message.TcpPeers!));
+                    else
+                    {
+                        Volatile.Write(ref tcpSnapshot, Array.AsReadOnly(message.TcpPeers!));
+                        var reading = message.TcpTraffic!;
+                        if (message.CaptureLoss) reading = reading with { Incomplete = true };
+                        Volatile.Write(ref tcpTraffic, new TcpTrafficSnapshot(message.Revision, reading));
+                    }
                     Interlocked.Exchange(ref droppedEvents, message.DroppedEvents);
                     Volatile.Write(ref error, message.DroppedEvents > 0 || message.CaptureLoss
                         ? "記録上限またはイベント欠落のため、一部の通信を記録できませんでした。表示・保存は観測できた範囲です。" : null);
@@ -244,6 +252,7 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
     {
         Volatile.Write(ref udpSnapshot, Array.Empty<UdpFlowInfo>());
         Volatile.Write(ref tcpSnapshot, Array.Empty<TcpPeerInfo>());
+        Volatile.Write(ref tcpTraffic, null);
     }
 
     internal static string SafeError(string? message) => string.IsNullOrWhiteSpace(message) ? "通信監視に失敗しました。"

@@ -33,6 +33,7 @@ internal sealed class TcpPeerView : UserControl
     private int appliedRevision = -1;
     private int pendingOperations;
     private bool monitorRequested;
+    private bool startedForTrafficDisplay;
     private bool stopFailed;
     private bool disposed;
     private bool resourcesDisposed;
@@ -150,9 +151,29 @@ internal sealed class TcpPeerView : UserControl
         if (Visible && !disposed) { timer.Start(); RefreshSnapshot(); }
     }
 
-    private async Task StartMonitoringAsync()
+    public TcpTrafficSnapshot? LiveTraffic => client.IsRunning && appliedRevision == revision && addresses.Length != 0
+        ? client.TcpTraffic : null;
+    public bool IsMonitorRunning => client.IsRunning;
+    public string? MonitorError => operationError ?? (client.IsRunning ? null : client.Error);
+
+    public Task StartForTrafficDisplayAsync()
+    {
+        if (disposed || client.IsRunning || pendingOperations != 0) return Task.CompletedTask;
+        if (addresses.Length == 0)
+        {
+            operationError = "選択したインタフェースに利用できる IP アドレスがありません。";
+            return Task.CompletedTask;
+        }
+        monitorRequested = false;
+        return StartMonitoringAsync(forTrafficDisplay: true);
+    }
+
+    public Task StopForTrafficDisplayAsync() => startedForTrafficDisplay ? StopMonitoringAsync() : Task.CompletedTask;
+
+    private async Task StartMonitoringAsync(bool forTrafficDisplay = false)
     {
         if (disposed || stopFailed || monitorRequested || client.IsRunning || pendingOperations != 0 || addresses.Length == 0) return;
+        startedForTrafficDisplay = forTrafficDisplay;
         monitorRequested = true;
         operationError = null;
         CancelDns();
@@ -251,6 +272,7 @@ internal sealed class TcpPeerView : UserControl
             acquired = true;
             await client.StopAsync();
             stopFailed = false;
+            startedForTrafficDisplay = false;
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
         catch (Exception ex)

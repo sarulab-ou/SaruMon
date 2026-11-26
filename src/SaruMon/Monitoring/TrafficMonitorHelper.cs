@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO.Pipes;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Security.Principal;
 using Microsoft.Diagnostics.Tracing;
 using SaruMon.Core;
@@ -31,6 +32,8 @@ internal static class TrafficMonitorHelper
         var exitCode = 0;
         UdpFlowTracker? udpTracker = null;
         TcpPeerTracker? tcpTracker = null;
+        NetworkAddressChangedEventHandler? hostAddressesChanged = null;
+        var trafficClock = new Stopwatch();
         var stateGate = new object();
         long revision = 0;
         try
@@ -46,7 +49,13 @@ internal static class TrafficMonitorHelper
                 throw new InvalidDataException("通信監視の初期設定が不正です。");
             var addresses = TrafficWireProtocol.ParseAddresses(initial.Addresses);
             if (arguments.Mode == MonitoringMode.Udp) udpTracker = new UdpFlowTracker(maxFlows: TrafficWireProtocol.MaxEntries);
-            else tcpTracker = new TcpPeerTracker(maxPeers: TrafficWireProtocol.MaxEntries);
+            else
+            {
+                tcpTracker = new TcpPeerTracker(maxPeers: TrafficWireProtocol.MaxEntries);
+                RefreshHostAddresses();
+                hostAddressesChanged = (_, _) => RefreshHostAddresses();
+                NetworkChange.NetworkAddressChanged += hostAddressesChanged;
+            }
             SetAddresses(addresses);
             revision = initial.Revision;
             // Descriptive and stable per user/logon session: never fill the system logger slots with random sessions.
@@ -131,6 +140,7 @@ internal static class TrafficMonitorHelper
         }
         finally
         {
+            if (hostAddressesChanged is not null) NetworkChange.NetworkAddressChanged -= hostAddressesChanged;
             lifetime.Cancel();
             await ObserveAsync(publisher).ConfigureAwait(false);
             // Stop through the owned trace handle only. This also unblocks ProcessTrace.
@@ -167,15 +177,38 @@ internal static class TrafficMonitorHelper
             var loss = session!.Loss;
             var dropped = udpTracker?.DroppedEvents ?? tcpTracker!.DroppedEvents;
             var totalDropped = dropped > long.MaxValue - loss.Events ? long.MaxValue : dropped + loss.Events;
+            TcpPeerInfo[]? peers = null;
+            TcpTrafficReading? traffic = null;
+            if (tcpTracker is not null)
+            {
+                peers = tcpTracker.Snapshot(out var received, out var sent).ToArray();
+                traffic = new TcpTrafficReading(received, sent, trafficClock.Elapsed.Ticks, loss.Events > 0 || loss.Buffers > 0);
+            }
             return new TrafficMessage("snapshot", UdpFlows: udpTracker?.Snapshot().ToArray(),
-                TcpPeers: tcpTracker?.Snapshot().ToArray(), Revision: revision, Mode: arguments.Mode,
-                DroppedEvents: totalDropped, CaptureLoss: loss.Buffers > 0);
+                TcpPeers: peers, Revision: revision, Mode: arguments.Mode,
+                DroppedEvents: totalDropped, CaptureLoss: loss.Buffers > 0, TcpTraffic: traffic);
         }
 
         void SetAddresses(IReadOnlyCollection<IPAddress> addresses)
         {
             udpTracker?.SetLocalAddresses(addresses);
             tcpTracker?.SetLocalAddresses(addresses);
+            if (tcpTracker is not null) trafficClock.Restart();
+        }
+
+        void RefreshHostAddresses()
+        {
+            try
+            {
+                var hostAddresses = new List<IPAddress>();
+                foreach (var adapter in NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    try { hostAddresses.AddRange(adapter.GetIPProperties().UnicastAddresses.Select(entry => entry.Address)); }
+                    catch (NetworkInformationException) { /* The adapter may have disappeared. */ }
+                }
+                tcpTracker!.SetHostAddresses(hostAddresses);
+            }
+            catch (NetworkInformationException) { /* Retain the last available host address set. */ }
         }
     }
 

@@ -12,7 +12,10 @@ internal enum MonitoringMode { Udp, Tcp }
 internal sealed record TrafficMessage(string Type, string? Nonce = null, string[]? Addresses = null,
     UdpFlowInfo[]? UdpFlows = null, TcpPeerInfo[]? TcpPeers = null, string? Error = null,
     long Revision = 0, long DroppedEvents = 0, bool CaptureLoss = false, bool Final = false,
-    MonitoringMode? Mode = null);
+    MonitoringMode? Mode = null, TcpTrafficReading? TcpTraffic = null);
+
+internal sealed record TcpTrafficReading(long ReceivedBytes, long SentBytes, long SampledAtTicks, bool Incomplete);
+internal sealed record TcpTrafficSnapshot(long Revision, TcpTrafficReading Reading);
 
 internal static class TrafficWireProtocol
 {
@@ -53,7 +56,8 @@ internal static class TrafficWireProtocol
             throw new InvalidDataException("通信監視データが不正です。");
         if (expectedMode == MonitoringMode.Tcp)
         {
-            if (message.UdpFlows is not null || message.TcpPeers is null || message.TcpPeers.Length > MaxEntries)
+            if (message.UdpFlows is not null || message.TcpPeers is null || message.TcpPeers.Length > MaxEntries
+                || message.TcpTraffic is not { ReceivedBytes: >= 0, SentBytes: >= 0, SampledAtTicks: >= 0 })
                 throw new InvalidDataException("TCP 監視データが不正です。");
             foreach (var peer in message.TcpPeers)
             {
@@ -64,7 +68,7 @@ internal static class TrafficWireProtocol
             }
             return;
         }
-        if (message.TcpPeers is not null || message.UdpFlows is null || message.UdpFlows.Length > MaxEntries)
+        if (message.TcpPeers is not null || message.TcpTraffic is not null || message.UdpFlows is null || message.UdpFlows.Length > MaxEntries)
             throw new InvalidDataException("UDP 監視データが不正です。");
         foreach (var flow in message.UdpFlows)
         {

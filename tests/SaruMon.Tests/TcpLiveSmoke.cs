@@ -80,6 +80,8 @@ internal static class TcpLiveSmoke
             }
             if (monitor.Error is not null || monitor.DroppedEvents != 0)
                 throw new InvalidOperationException("TCP capture was partial: " + monitor.Error);
+            if (monitor.TcpTraffic?.Reading is not { SentBytes: 0, ReceivedBytes: 0, Incomplete: false })
+                throw new InvalidOperationException("Loopback TCP must stay out of the interface overview.");
             Console.WriteLine("PASS: TCP peer aggregation, bidirectional bytes, observed connection counts, refused/previous connections excluded, first/last times, final snapshot, and helper exit.");
             return 0;
 

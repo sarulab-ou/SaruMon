@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using SaruMon.Core;
+using SaruMon.Monitoring;
 
 namespace SaruMon;
 
@@ -30,6 +31,12 @@ internal sealed class ConnectionsView : UserControl
     private bool refreshPending;
     private bool stopped;
     private CancellationTokenSource? dnsCancellation;
+
+    public TcpTrafficSnapshot? LiveTraffic => peerView.LiveTraffic;
+    public bool IsTcpMonitorRunning => peerView.IsMonitorRunning;
+    public string? TcpMonitorError => peerView.MonitorError;
+    public Task StartTcpTrafficDisplayAsync() => peerView.StartForTrafficDisplayAsync();
+    public Task StopTcpTrafficDisplayAsync() => peerView.StopForTrafficDisplayAsync();
 
     public ConnectionsView(ReverseDnsResolver? resolver = null)
     {

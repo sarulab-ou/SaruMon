@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net.NetworkInformation;
 using SaruMon.Core;
+using SaruMon.Monitoring;
 using SaruMon.Updates;
 
 namespace SaruMon;
@@ -10,6 +11,7 @@ internal sealed class MainForm : Form
     private readonly AppSettings settings = AppSettings.Load();
     private readonly TrafficSampler sampler = new();
     private readonly TcpIndicatorSampler tcpIndicatorSampler = new();
+    private readonly TcpTrafficMeter tcpTrafficMeter = new();
     private readonly Stopwatch clock = Stopwatch.StartNew();
     private readonly TrafficIcons icons = new(SystemInformation.SmallIconSize.Width);
     private readonly NotifyIcon tray;
@@ -30,9 +32,15 @@ internal sealed class MainForm : Form
     private readonly ToolStripMenuItem unicastOnlyMenu = new("ユニキャスト通信だけで矢印を表示") { CheckOnClick = true };
     private readonly CheckBox tcpIndicator = new() { Text = "TCP通信の目安で矢印を表示", AutoSize = true };
     private readonly ToolStripMenuItem tcpIndicatorMenu = new("TCP通信の目安で矢印を表示") { CheckOnClick = true };
+    private readonly CheckBox tcpOnly = new() { Text = "TCP通信だけを表示（管理者権限）", AutoSize = true, Anchor = AnchorStyles.Left };
+    private readonly ToolStripMenuItem tcpOnlyMenu = new("TCP通信だけを表示（管理者権限）");
     private readonly bool startHidden;
     private TrafficSample? latestSample;
     private TcpActivity? latestTcpActivity;
+    private TcpTrafficDisplay? tcpTraffic;
+    private long? displayedTcpRevision;
+    private bool tcpOnlyMode;
+    private bool changingTcpMode;
     private bool refreshing;
     private bool exiting;
     private bool shuttingDown;
@@ -136,7 +144,11 @@ internal sealed class MainForm : Form
         tips.SetToolTip(startup, "次回のログインから通知領域で起動します。実行ファイルを移動した場合は設定し直してください。");
         var hide = new Button { Text = "通知領域に格納", Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 2) };
         hide.Click += (_, _) => HideToTray();
-        options.Controls.Add(startup, 0, 0);
+        var mainOptions = new FlowLayoutPanel { Dock = DockStyle.Fill, Margin = Padding.Empty, WrapContents = false };
+        startup.Margin = new Padding(3, 7, 15, 0);
+        tcpOnly.Margin = new Padding(3, 7, 3, 0);
+        mainOptions.Controls.AddRange([startup, tcpOnly]);
+        options.Controls.Add(mainOptions, 0, 0);
         options.Controls.Add(hide, 1, 0);
         unicastOnly.Checked = settings.UnicastOnlyIndicator;
         unicastOnlyMenu.Checked = settings.UnicastOnlyIndicator;
@@ -148,6 +160,7 @@ internal sealed class MainForm : Form
         indicatorOptions.Controls.AddRange([unicastOnly, tcpIndicator]);
         options.Controls.Add(indicatorOptions, 0, 1);
         options.SetColumnSpan(indicatorOptions, 2);
+        tips.SetToolTip(tcpOnly, "選択したインタフェースのローカルIPでTCPを観測し、速度・合計・グラフ・矢印に表示します。\n相手ごとのTCP監視と同じ観測を使い、このPC内で完結する通信は表示から除きます。");
         body.Controls.Add(options, 0, 5);
         footer.Text = "0.5秒ごとに更新 · × を押しても監視を続けます";
         footer.Dock = DockStyle.Fill;
@@ -160,6 +173,7 @@ internal sealed class MainForm : Form
         trayMenu.Items.Add("SaruMon を開く", null, (_, _) => ShowFromTray());
         trayMenu.Items.Add(unicastOnlyMenu);
         trayMenu.Items.Add(tcpIndicatorMenu);
+        trayMenu.Items.Add(tcpOnlyMenu);
         trayMenu.Items.Add("アイコンを常に表示するには", null, (_, _) => { ShowFromTray(); ShowTrayHelp(); });
         trayMenu.Items.Add("更新を確認…", null, (_, _) => { ShowFromTray(); OpenUpdates(); });
         trayMenu.Items.Add(new ToolStripSeparator());
@@ -170,6 +184,8 @@ internal sealed class MainForm : Form
         unicastOnlyMenu.CheckedChanged += (_, _) => SetUnicastOnlyIndicator(unicastOnlyMenu.Checked);
         tcpIndicator.CheckedChanged += (_, _) => SetTcpActivityIndicator(tcpIndicator.Checked);
         tcpIndicatorMenu.CheckedChanged += (_, _) => SetTcpActivityIndicator(tcpIndicatorMenu.Checked);
+        tcpOnly.CheckedChanged += async (_, _) => await SetTcpOnlyModeAsync(tcpOnly.Checked);
+        tcpOnlyMenu.Click += async (_, _) => await SetTcpOnlyModeAsync(!tcpOnlyMode);
         adapter.SelectedIndexChanged += (_, _) => SelectAdapter();
         RefreshAdapters();
         timer.Tick += (_, _) => Poll();
@@ -243,16 +259,62 @@ internal sealed class MainForm : Form
         var selected = adapter.SelectedItem as AdapterChoice;
         var sample = selected == null ? null : sampler.Sample(TrafficNetwork.ReadCounters(selected.Id), clock.Elapsed);
         latestSample = sample;
-        if (settings.TcpActivityIndicator && sample?.IsAvailable == true)
+        tcpTraffic = tcpTrafficMeter.Read(connections.LiveTraffic);
+        if (!tcpOnlyMode && settings.TcpActivityIndicator && sample?.IsAvailable == true)
             latestTcpActivity = tcpIndicatorSampler.Read(sample.HasRate);
         else if (latestTcpActivity.HasValue)
             ResetTcpIndicator();
-        receiveRate.Text = sample?.HasRate == true ? FormatBytes(sample.DownloadBytesPerSecond) + "/s" : "—";
-        sendRate.Text = sample?.HasRate == true ? FormatBytes(sample.UploadBytesPerSecond) + "/s" : "—";
-        receiveTotal.Text = "選択後の合計  " + FormatBytes(sample?.TotalReceivedBytes ?? 0);
-        sendTotal.Text = "選択後の合計  " + FormatBytes(sample?.TotalSentBytes ?? 0);
-        graph.Add(sample?.DownloadBytesPerSecond ?? 0, sample?.UploadBytesPerSecond ?? 0);
+        RenderTraffic(addGraphSample: true);
+    }
+
+    private void RenderTraffic(bool addGraphSample)
+    {
+        var traffic = tcpOnlyMode && latestSample?.IsAvailable == true ? tcpTraffic : null;
+        if (traffic is not null && displayedTcpRevision != traffic.Revision)
+        {
+            displayedTcpRevision = traffic.Revision;
+            graph.Reset();
+        }
+        var down = tcpOnlyMode ? traffic?.DownloadBytesPerSecond : latestSample?.HasRate == true ? latestSample.DownloadBytesPerSecond : null;
+        var up = tcpOnlyMode ? traffic?.UploadBytesPerSecond : latestSample?.HasRate == true ? latestSample.UploadBytesPerSecond : null;
+        receiveRate.Text = down.HasValue ? FormatBytes(down.Value) + "/s" : "—";
+        sendRate.Text = up.HasValue ? FormatBytes(up.Value) + "/s" : "—";
+        receiveTotal.Text = tcpOnlyMode ? "TCP 観測後の合計  " + (traffic is null ? "—" : FormatBytes(traffic.ReceivedBytes))
+            : "選択後の合計  " + FormatBytes(latestSample?.TotalReceivedBytes ?? 0);
+        sendTotal.Text = tcpOnlyMode ? "TCP 観測後の合計  " + (traffic is null ? "—" : FormatBytes(traffic.SentBytes))
+            : "選択後の合計  " + FormatBytes(latestSample?.TotalSentBytes ?? 0);
+        if (addGraphSample) graph.Add(down ?? 0, up ?? 0);
         RenderIndicator();
+    }
+
+    private async Task SetTcpOnlyModeAsync(bool enabled)
+    {
+        if (changingTcpMode || shuttingDown || enabled == tcpOnlyMode) return;
+        changingTcpMode = true;
+        tcpOnlyMode = enabled;
+        tcpOnly.Checked = tcpOnlyMenu.Checked = enabled;
+        tcpOnly.Enabled = tcpOnlyMenu.Enabled = false;
+        unicastOnly.Enabled = unicastOnlyMenu.Enabled = tcpIndicator.Enabled = tcpIndicatorMenu.Enabled = !enabled;
+        ResetTcpIndicator();
+        displayedTcpRevision = null;
+        graph.Reset();
+        RenderTraffic(addGraphSample: false);
+        try
+        {
+            if (enabled) await connections.StartTcpTrafficDisplayAsync();
+            else await connections.StopTcpTrafficDisplayAsync();
+        }
+        finally
+        {
+            changingTcpMode = false;
+            if (!IsDisposed && !shuttingDown)
+            {
+                tcpOnly.Enabled = tcpOnlyMenu.Enabled = true;
+                var error = connections.TcpMonitorError;
+                if (error is not null) footer.Text = error;
+                RenderTraffic(addGraphSample: false);
+            }
+        }
     }
 
     private void SetUnicastOnlyIndicator(bool enabled)
@@ -294,10 +356,10 @@ internal sealed class MainForm : Form
     private void RenderIndicator()
     {
         var sample = latestSample;
-        var onlyUnicast = settings.UnicastOnlyIndicator;
-        var useTcp = settings.TcpActivityIndicator;
-        var receiving = onlyUnicast ? sample?.IsUnicastReceiving == true : sample?.IsReceiving == true;
-        var sending = onlyUnicast ? sample?.IsUnicastSending == true : sample?.IsSending == true;
+        var onlyUnicast = !tcpOnlyMode && settings.UnicastOnlyIndicator;
+        var useTcp = !tcpOnlyMode && settings.TcpActivityIndicator;
+        var receiving = tcpOnlyMode ? tcpTraffic?.DownloadBytesPerSecond > 0 : onlyUnicast ? sample?.IsUnicastReceiving == true : sample?.IsReceiving == true;
+        var sending = tcpOnlyMode ? tcpTraffic?.UploadBytesPerSecond > 0 : onlyUnicast ? sample?.IsUnicastSending == true : sample?.IsSending == true;
         if (useTcp)
         {
             receiving &= latestTcpActivity?.IsReceiving == true;
@@ -317,8 +379,13 @@ internal sealed class MainForm : Form
             if (latestTcpActivity is null) status = "計測待ち";
             else if (!latestTcpActivity.Value.IsAvailable) status = "TCP統計なし";
         }
-        var mode = useTcp ? (onlyUnicast ? "TCP目安・ユニキャスト" : "TCP目安") : (onlyUnicast ? "ユニキャスト" : "全通信");
-        connection.Text = "● " + (useTcp || onlyUnicast ? mode + " " : "") + status;
+        if (tcpOnlyMode && sample?.IsAvailable == true)
+        {
+            if (tcpTraffic is null) status = changingTcpMode ? "管理者確認中" : connections.IsTcpMonitorRunning ? "計測待ち" : "観測停止中";
+            else if (tcpTraffic.Incomplete) status += "（一部未計測）";
+        }
+        var mode = tcpOnlyMode ? "TCP観測" : useTcp ? (onlyUnicast ? "TCP目安・ユニキャスト" : "TCP目安") : (onlyUnicast ? "ユニキャスト" : "全通信");
+        connection.Text = "● " + (tcpOnlyMode || useTcp || onlyUnicast ? mode + " " : "") + status;
         connection.ForeColor = TrafficIcons.ColorFor(state);
         var trafficIcon = icons.GetIcon(sample?.IsAvailable == true, receiving ? 1 : 0, sending ? 1 : 0);
         // Icons are cached. Avoid repeated shell/window notifications while the state is unchanged.
@@ -326,7 +393,8 @@ internal sealed class MainForm : Form
         if (!ReferenceEquals(Icon, trafficIcon)) Icon = trafficIcon;
         var name = (adapter.SelectedItem as AdapterChoice)?.Interface?.Name ?? "未選択";
         if (name.Length > 10) name = name[..9] + "…";
-        var tooltip = $"SaruMon · {name}\n矢印: {mode} · {status}\n全体 ↓ {receiveRate.Text} ↑ {sendRate.Text}";
+        var scope = tcpOnlyMode ? "TCP" : "全体";
+        var tooltip = $"SaruMon · {name}\n矢印: {mode} · {status}\n{scope} ↓ {receiveRate.Text} ↑ {sendRate.Text}";
         if (tooltip.Length > 63) tooltip = tooltip[..63];
         if (tray.Text != tooltip) tray.Text = tooltip;
     }
@@ -358,7 +426,7 @@ internal sealed class MainForm : Form
         "SaruMon アイコンを常に表示する", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
     private void ShowHelp() => MessageBox.Show(this,
-        "1. 監視するインタフェースを選択します。\n2. 通知領域に格納すると、白地の矢印で通信を確認できます。\n\n下り（受信）: 緑の下矢印 / 上り（送信）: 赤の上矢印\n色の濃さは固定です。0.5秒ごとに、通信があった方向の矢印を表示します。\n通信がない方向の矢印は消え、未接続はオレンジの × です。\n「ユニキャスト通信だけで矢印を表示」をオンにすると、ブロードキャスト・マルチキャストでは矢印を表示しません。\n管理者権限は不要で、TCP・UDPとLAN内の個別通信を含みます。設定は次回起動時も引き継ぎます。\n「TCP通信の目安で矢印を表示」では、選択した回線とPC全体のTCPで同じ区間に通信が増えた方向を点灯します。\nPC内や別回線のTCPが選択回線のUDPと重なると点灯する場合があります。管理者権限は不要です。\n速度・合計・グラフはインタフェース全体の値です。\n速度の単位はバイト/秒です（1 KiB = 1,024 B）。\n合計は現在のインタフェースを選択してからの通信量です。\n\n「接続先（TCP）」タブで IP・宛先ポート・接続状態を確認できます。\n「相手ごとの通信量」で監視を開始すると、相手 IP ごとの上り・下り合計を記録します。\n「ログを保存」で、相手 IP・名前・上り合計・下り合計・接続回数・開始時刻・最終時刻を CSV に保存できます。\n接続回数は監視中に観測した分です。監視前からの接続は回数に含めません。\n開始・最終時刻は、その相手を最初・最後に観測した時刻です。\n「逆引き」をオンにすると、DNS で取得したホスト名も表示します。\nホスト名は閲覧サイト名とは限りません。\n\n「UDP 送信先」で「開始」を押すと、管理者承認後に UDP 送信を記録します。\n「保存」で、開始時刻・最終時刻・送信イベント数・累積送信量を CSV に保存できます。\nUDP の開始・最終時刻は、最初・最後に送信を観測した時刻です。\n監視開始前の通信は含みません。停止後も保存でき、再開・インタフェース変更で記録をクリアします。\n\nアイコンが隠れている場合は、タスクバー右端の ∧ を開き、SaruMon を時計の近くへドラッグしてください。\nアイコンのクリック、または SaruMon の再起動で画面が開きます。\n終了するには、メニューの「終了」を選びます。\n\n更新は「ヘルプ → 更新を確認」から実行できます。",
+        "1. 監視するインタフェースを選択します。\n2. 通知領域に格納すると、白地の矢印で通信を確認できます。\n\n下り（受信）: 緑の下矢印 / 上り（送信）: 赤の上矢印\n色の濃さは固定です。0.5秒ごとに、通信があった方向の矢印を表示します。\n通信がない方向の矢印は消え、未接続はオレンジの × です。\n「ユニキャスト通信だけで矢印を表示」をオンにすると、ブロードキャスト・マルチキャストでは矢印を表示しません。\n管理者権限は不要で、TCP・UDPとLAN内の個別通信を含みます。設定は次回起動時も引き継ぎます。\n「TCP通信の目安で矢印を表示」では、選択した回線とPC全体のTCPで同じ区間に通信が増えた方向を点灯します。\nPC内や別回線のTCPが選択回線のUDPと重なると点灯する場合があります。管理者権限は不要です。\n「TCP通信だけを表示（管理者権限）」をオンにすると、選択したインタフェースのローカルIPに対応するTCPの矢印・速度・合計・グラフを表示します。\nPC内で完結する通信は除きます。TCP観測は起動時にオフです。\n通常時と目安モードの速度・合計・グラフはインタフェース全体の値です。\n速度の単位はバイト/秒です（1 KiB = 1,024 B）。\n合計は現在のインタフェースを選択してからの通信量です。\n\n「接続先（TCP）」タブで IP・宛先ポート・接続状態を確認できます。\n「相手ごとの通信量」で監視を開始すると、相手 IP ごとの上り・下り合計を記録します。\n「ログを保存」で、相手 IP・名前・上り合計・下り合計・接続回数・開始時刻・最終時刻を CSV に保存できます。\n接続回数は監視中に観測した分です。監視前からの接続は回数に含めません。\n開始・最終時刻は、その相手を最初・最後に観測した時刻です。\n「逆引き」をオンにすると、DNS で取得したホスト名も表示します。\nホスト名は閲覧サイト名とは限りません。\n\n「UDP 送信先」で「開始」を押すと、管理者承認後に UDP 送信を記録します。\n「保存」で、開始時刻・最終時刻・送信イベント数・累積送信量を CSV に保存できます。\nUDP の開始・最終時刻は、最初・最後に送信を観測した時刻です。\n監視開始前の通信は含みません。停止後も保存でき、再開・インタフェース変更で記録をクリアします。\n\nアイコンが隠れている場合は、タスクバー右端の ∧ を開き、SaruMon を時計の近くへドラッグしてください。\nアイコンのクリック、または SaruMon の再起動で画面が開きます。\n終了するには、メニューの「終了」を選びます。\n\n更新は「ヘルプ → 更新を確認」から実行できます。",
         "SaruMon の使い方", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
     public async void RequestExit()

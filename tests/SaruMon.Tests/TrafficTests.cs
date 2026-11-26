@@ -1,4 +1,5 @@
 using SaruMon.Core;
+using SaruMon.Monitoring;
 
 namespace SaruMon.Tests;
 
@@ -24,7 +25,8 @@ internal static class TrafficTests
         LargeUnicastCountersDoNotOverflow();
         TcpActivityUsesBothFamiliesAndResends();
         TcpActivityRebaselinesAfterResetAndMissingRead();
-        return 18;
+        TcpOverviewUsesCaptureIntervalsAndRevisions();
+        return 19;
     }
 
     private static TrafficSample Sample(TrafficSampler sampler, double time, long received, long sent,
@@ -307,6 +309,23 @@ internal static class TrafficTests
         sampler.Reset();
         var enabled = sampler.Sample(new(105, 110, 110), null, hasInterfaceInterval: true);
         Expect(enabled == new TcpActivity(true, false, false), "Re-enabling the indicator must establish a fresh baseline.");
+    }
+
+    private static void TcpOverviewUsesCaptureIntervalsAndRevisions()
+    {
+        var meter = new TcpTrafficMeter();
+        var first = new TcpTrafficSnapshot(1, new TcpTrafficReading(400, 100, TimeSpan.TicksPerSecond, false));
+        var displayed = meter.Read(first)!;
+        Expect(displayed.DownloadBytesPerSecond == 400 && displayed.UploadBytesPerSecond == 100,
+            "Traffic in the first interval should be visible.");
+        Expect(ReferenceEquals(displayed, meter.Read(first)), "Polling faster than capture must reuse the last observation.");
+        var next = meter.Read(new(1, new(400, 400, TimeSpan.TicksPerSecond * 3, true)))!;
+        Expect(next.DownloadBytesPerSecond == 0 && next.UploadBytesPerSecond == 150 && next.Incomplete,
+            "Idle receive must extinguish its arrow while upload uses the actual capture interval.");
+        var switched = meter.Read(new(2, new(10, 0, TimeSpan.TicksPerSecond, false)))!;
+        Expect(switched.DownloadBytesPerSecond == 10 && switched.ReceivedBytes == 10 && switched.SentBytes == 0,
+            "A new selection must not reuse the prior selection's sample or totals.");
+        Expect(meter.Read(null) is null, "Stopped or unavailable capture must clear the display.");
     }
 
     private static void Equal(double expected, double actual, string message) =>

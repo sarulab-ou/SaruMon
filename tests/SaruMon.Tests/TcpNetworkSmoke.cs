@@ -58,6 +58,9 @@ internal static class TcpNetworkSmoke
             var retained = monitor.TcpSnapshot.SingleOrDefault(item => item.RemoteAddress == Normalize(remote));
             if (retained is not { SentBytes: > 0, ReceivedBytes: > 0 } || monitor.IsRunning)
                 throw new InvalidOperationException("The remote peer's bidirectional totals were not retained.");
+            var overview = monitor.TcpTraffic?.Reading;
+            if (overview is null || overview.SentBytes < retained.SentBytes || overview.ReceivedBytes < retained.ReceivedBytes || overview.Incomplete)
+                throw new InvalidOperationException("The separate interface overview is missing observed TCP traffic.");
             if (monitor.Error is not null || monitor.DroppedEvents != 0)
                 throw new InvalidOperationException("Capture was partial: " + monitor.Error);
             Console.WriteLine($"TCP public peer {remote}: upload={retained.SentBytes}, download={retained.ReceivedBytes}");

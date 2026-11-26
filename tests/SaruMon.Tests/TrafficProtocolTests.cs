@@ -56,19 +56,24 @@ internal static class TrafficProtocolTests
         Reject(() => Validate(valid with { Mode = null }), "missing monitoring mode");
         Reject(() => Validate(valid with { Mode = MonitoringMode.Tcp }), "wrong monitoring mode");
         var peer = new TcpPeerInfo("198.51.100.1", 10, 20, now, now);
-        var tcp = new TrafficMessage("snapshot", TcpPeers: [peer], Revision: 1, Mode: MonitoringMode.Tcp);
+        var traffic = new TcpTrafficReading(200, 300, TimeSpan.TicksPerSecond, false);
+        var tcp = new TrafficMessage("snapshot", TcpPeers: [peer], Revision: 1, Mode: MonitoringMode.Tcp, TcpTraffic: traffic);
         TrafficWireProtocol.ValidateSnapshot(tcp, MonitoringMode.Tcp);
         Check(true, "TCP bidirectional peer snapshot");
         Reject(() => TrafficWireProtocol.ValidateSnapshot(tcp, MonitoringMode.Udp), "TCP snapshot for UDP client");
         Reject(() => TrafficWireProtocol.ValidateSnapshot(tcp with { UdpFlows = [flow] }, MonitoringMode.Tcp), "mixed protocol payload");
         Reject(() => TrafficWireProtocol.ValidateSnapshot(tcp with { TcpPeers = null }, MonitoringMode.Tcp), "missing peer array");
+        Reject(() => TrafficWireProtocol.ValidateSnapshot(tcp with { TcpTraffic = null }, MonitoringMode.Tcp), "missing TCP overview totals");
+        Reject(() => TrafficWireProtocol.ValidateSnapshot(tcp with { TcpTraffic = traffic with { ReceivedBytes = -1 } }, MonitoringMode.Tcp), "negative TCP overview total");
+        Reject(() => Validate(valid with { TcpTraffic = traffic }), "TCP overview in UDP snapshot");
         Reject(() => TrafficWireProtocol.ValidateSnapshot(tcp with { TcpPeers = [peer with { SentBytes = -1 }] }, MonitoringMode.Tcp), "negative sent count");
         Reject(() => TrafficWireProtocol.ValidateSnapshot(tcp with { TcpPeers = [peer with { ReceivedBytes = -1 }] }, MonitoringMode.Tcp), "negative received count");
         Reject(() => TrafficWireProtocol.ValidateSnapshot(tcp with { TcpPeers = [peer with { ConnectionCount = -1 }] }, MonitoringMode.Tcp), "negative connection count");
         var connected = tcp with { TcpPeers = [peer with { SentBytes = 0, ReceivedBytes = 0, ConnectionCount = long.MaxValue }] };
         var roundTrip = TrafficWireProtocol.Deserialize(JsonSerializer.Serialize(connected, TrafficWireProtocol.JsonOptions));
         TrafficWireProtocol.ValidateSnapshot(roundTrip, MonitoringMode.Tcp);
-        Check(roundTrip.TcpPeers![0].ConnectionCount == long.MaxValue, "connection-only peer and exact connection count survive IPC");
+        Check(roundTrip.TcpPeers![0].ConnectionCount == long.MaxValue && roundTrip.TcpTraffic == traffic,
+            "Peer connection count and separate TCP overview survive IPC");
         Reject(() => TrafficWireProtocol.ValidateSnapshot(tcp with { TcpPeers = [peer with { RemoteAddress = "host.example" }] }, MonitoringMode.Tcp), "peer hostname is not an address");
         Reject(() => TrafficWireProtocol.ValidateSnapshot(tcp with { TcpPeers = [peer with { FirstSeen = now.AddSeconds(1) }] }, MonitoringMode.Tcp), "TCP observation time order");
         Reject(() => TrafficWireProtocol.ValidateSnapshot(tcp with { TcpPeers = Enumerable.Repeat(peer, TrafficWireProtocol.MaxEntries + 1).ToArray() }, MonitoringMode.Tcp), "oversize peer array");

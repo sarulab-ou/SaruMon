@@ -26,8 +26,11 @@ public sealed class TcpPeerTracker
     private readonly Dictionary<AddressKey, PeerEntry> peers = new();
     private readonly LinkedList<PeerEntry> recency = new();
     private HashSet<AddressKey> localAddresses = new();
+    private HashSet<AddressKey> hostAddresses = new();
     private DateTimeOffset lastClock;
     private long droppedEvents;
+    private long receivedBytes;
+    private long sentBytes;
 
     public TcpPeerTracker(int maxPeers = 2048, Func<DateTimeOffset>? clock = null)
     {
@@ -53,7 +56,18 @@ public sealed class TcpPeerTracker
             recency.Clear();
             lastClock = default;
             droppedEvents = 0;
+            receivedBytes = 0;
+            sentBytes = 0;
         }
+    }
+
+    /// <summary>Addresses belonging to this PC are excluded from the interface totals.</summary>
+    public void SetHostAddresses(IEnumerable<IPAddress> addresses)
+    {
+        var host = new HashSet<AddressKey>();
+        foreach (var address in addresses)
+            if (TryNormalize(address, out var key) && key.IsUnicast) host.Add(key);
+        lock (gate) hostAddresses = host;
     }
 
     /// <summary>
@@ -80,6 +94,13 @@ public sealed class TcpPeerTracker
         lock (gate)
         {
             if (!localAddresses.Contains(localKey)) return;
+            // The overview must include all observed traffic, even when the peer list is full.
+            if (isSend is bool sending && !localKey.IsLoopback && !remoteKey.IsLoopback
+                && !localAddresses.Contains(remoteKey) && !hostAddresses.Contains(remoteKey))
+            {
+                if (sending) sentBytes = SaturatingAdd(sentBytes, bytes);
+                else receivedBytes = SaturatingAdd(receivedBytes, bytes);
+            }
             if (peers.TryGetValue(remoteKey, out var existing))
             {
                 existing.Observe(isSend, bytes, ReadClock());
@@ -99,10 +120,14 @@ public sealed class TcpPeerTracker
     }
 
     /// <summary>Immutable, most recently observed first. Inactive peers never expire.</summary>
-    public IReadOnlyList<TcpPeerInfo> Snapshot()
+    public IReadOnlyList<TcpPeerInfo> Snapshot() => Snapshot(out _, out _);
+
+    public IReadOnlyList<TcpPeerInfo> Snapshot(out long received, out long sent)
     {
         lock (gate)
         {
+            received = receivedBytes;
+            sent = sentBytes;
             var snapshot = new List<TcpPeerInfo>(peers.Count);
             for (var node = recency.Last; node is not null; node = node.Previous)
             {
@@ -141,6 +166,7 @@ public sealed class TcpPeerTracker
 
     private readonly record struct AddressKey(bool IsIpv4, ulong High, ulong Low)
     {
+        public bool IsLoopback => IsIpv4 ? Low >> 24 == 127 : High == 0 && Low == 1;
         public bool IsUnicast => (High != 0 || Low != 0) && !(IsIpv4 && Low == uint.MaxValue)
             && !(IsIpv4 ? (Low & 0xF0000000) == 0xE0000000 : (High >> 56) == 0xFF);
 

@@ -28,7 +28,32 @@ internal static class TcpPeerTests
         ObservedConnectionsAreIndependentOfBytes();
         ConnectionsUpdateFirstAndLastTimes();
         ConnectionsUseSelectionNormalizationAndCapacity();
-        return 15;
+        OverviewCountsSelectedExternalTrafficBeyondPeerCapacity();
+        return 16;
+    }
+
+    private static void OverviewCountsSelectedExternalTrafficBeyondPeerCapacity()
+    {
+        var tracker = new TcpPeerTracker(maxPeers: 1);
+        var anotherAdapter = IPAddress.Parse("192.0.2.11");
+        var localV6 = IPAddress.Parse("2001:db8::2");
+        var externalV6 = IPAddress.Parse("2001:db8::3");
+        tracker.SetHostAddresses([Local, anotherAdapter.MapToIPv6(), localV6]);
+        tracker.SetLocalAddresses([Local, localV6, IPAddress.Loopback]);
+        tracker.Record(true, Local, Remote, 100);
+        tracker.Record(false, localV6, externalV6, 200);
+        tracker.RecordConnection(Local, Remote);
+        tracker.Record(true, anotherAdapter, Remote, 500);
+        tracker.Record(false, Local, anotherAdapter, 500);
+        tracker.Record(true, Local, Local, 500);
+        tracker.Record(true, IPAddress.Loopback, IPAddress.Parse("127.0.0.2"), 500);
+        var peers = tracker.Snapshot(out var received, out var sent);
+        Assert(peers.Count == 1 && tracker.DroppedEvents > 0 && sent == 100 && received == 200,
+            "The overview must count only selected, external data, including peers beyond capacity.");
+        tracker.SetLocalAddresses([anotherAdapter]);
+        tracker.Record(false, Local, Remote, 500);
+        tracker.Snapshot(out received, out sent);
+        Assert(received == 0 && sent == 0, "Changing the selection must clear the overview totals.");
     }
 
     private static void AggregatesDirectionsAcrossSelectedLocalAddresses()
