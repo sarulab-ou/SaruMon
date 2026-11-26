@@ -25,7 +25,10 @@ internal static class TcpPeerTests
         CountersAndDropsSaturate();
         ConcurrentUpdatesKeepBothDirections();
         SnapshotsRemainIndependent();
-        return 12;
+        ObservedConnectionsAreIndependentOfBytes();
+        ConnectionsUpdateFirstAndLastTimes();
+        ConnectionsUseSelectionNormalizationAndCapacity();
+        return 15;
     }
 
     private static void AggregatesDirectionsAcrossSelectedLocalAddresses()
@@ -41,7 +44,7 @@ internal static class TcpPeerTests
         tracker.Record(false, Local, Remote, 70);
         tracker.Record(true, IPAddress.Parse("192.0.2.12"), Remote, 9999);
         var peer = tracker.Snapshot().Single();
-        Assert(peer.RemoteAddress == Remote.ToString() && peer.SentBytes == 140 && peer.ReceivedBytes == 320,
+        Assert(peer.RemoteAddress == Remote.ToString() && peer.SentBytes == 140 && peer.ReceivedBytes == 320 && peer.ConnectionCount == 0,
             "A remote peer must aggregate selected connections while preserving independent send/receive totals.");
     }
 
@@ -187,13 +190,17 @@ internal static class TcpPeerTests
         var entry = storage.Values.Cast<object>().Single();
         entry.GetType().GetProperty("SentBytes")!.SetValue(entry, long.MaxValue - 1);
         entry.GetType().GetProperty("ReceivedBytes")!.SetValue(entry, long.MaxValue - 1);
+        entry.GetType().GetProperty("ConnectionCount")!.SetValue(entry, long.MaxValue - 1);
         tracker.Record(true, Local, Remote, int.MaxValue);
         tracker.Record(false, Local, Remote, int.MaxValue);
+        tracker.RecordConnection(Local, Remote);
+        tracker.RecordConnection(Local, Remote);
         typeof(TcpPeerTracker).GetField("droppedEvents", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(tracker, long.MaxValue - 1);
         tracker.Record(true, Local, IPAddress.Parse("198.51.100.21"), 1);
         tracker.Record(false, Local, IPAddress.Parse("198.51.100.21"), 1);
         var peer = tracker.Snapshot().Single();
-        Assert(peer.SentBytes == long.MaxValue && peer.ReceivedBytes == long.MaxValue && tracker.DroppedEvents == long.MaxValue,
+        Assert(peer.SentBytes == long.MaxValue && peer.ReceivedBytes == long.MaxValue && peer.ConnectionCount == long.MaxValue
+            && tracker.DroppedEvents == long.MaxValue,
             "Counters wrapped instead of saturating.");
     }
 
@@ -201,9 +208,14 @@ internal static class TcpPeerTests
     {
         var tracker = new TcpPeerTracker(clock: () => Epoch);
         tracker.SetLocalAddresses([Local]);
-        Parallel.For(0, 10000, index => tracker.Record(index % 2 == 0, Local, Remote, index % 2 == 0 ? 2 : 3));
+        Parallel.For(0, 10000, index =>
+        {
+            tracker.Record(index % 2 == 0, Local, Remote, index % 2 == 0 ? 2 : 3);
+            tracker.RecordConnection(Local, Remote);
+        });
         var peer = tracker.Snapshot().Single();
-        Assert(peer.SentBytes == 10000 && peer.ReceivedBytes == 15000, "Concurrent events lost directional increments.");
+        Assert(peer.SentBytes == 10000 && peer.ReceivedBytes == 15000 && peer.ConnectionCount == 10000,
+            "Concurrent events lost directional bytes or connection increments.");
     }
 
     private static void SnapshotsRemainIndependent()
@@ -213,9 +225,77 @@ internal static class TcpPeerTests
         tracker.Record(true, Local, Remote, 10);
         var earlier = tracker.Snapshot();
         tracker.Record(false, Local, Remote, 20);
+        tracker.RecordConnection(Local, Remote);
         tracker.SetLocalAddresses([]);
-        Assert(earlier.Single().SentBytes == 10 && earlier.Single().ReceivedBytes == 0 && earlier.Single().FirstSeen == Epoch,
+        Assert(earlier.Single().SentBytes == 10 && earlier.Single().ReceivedBytes == 0 && earlier.Single().FirstSeen == Epoch
+            && earlier.Single().ConnectionCount == 0,
             "A previous immutable snapshot changed after updates or a reset.");
+    }
+
+    private static void ObservedConnectionsAreIndependentOfBytes()
+    {
+        var tracker = new TcpPeerTracker();
+        tracker.SetLocalAddresses([Local]);
+        tracker.Record(true, Local, Remote, 100);
+        tracker.Record(false, Local, Remote, 200);
+        Assert(tracker.Snapshot().Single().ConnectionCount == 0,
+            "Traffic on a preexisting connection must not invent an observed connection establishment.");
+        tracker.RecordConnection(Local, Remote);
+        tracker.RecordConnection(Local, Remote);
+        for (var index = 0; index < 10; index++)
+        {
+            tracker.Record(true, Local, Remote, 1);
+            tracker.Record(false, Local, Remote, 2);
+        }
+        var peer = tracker.Snapshot().Single();
+        Assert(peer.ConnectionCount == 2 && peer.SentBytes == 110 && peer.ReceivedBytes == 220,
+            "Data events inflated the connection count, or connect events added bytes.");
+    }
+
+    private static void ConnectionsUpdateFirstAndLastTimes()
+    {
+        var now = Epoch;
+        var tracker = new TcpPeerTracker(clock: () => now);
+        tracker.SetLocalAddresses([Local]);
+        tracker.RecordConnection(Local, Remote);
+        var first = tracker.Snapshot().Single();
+        Assert(first.ConnectionCount == 1 && first.SentBytes == 0 && first.ReceivedBytes == 0
+            && first.FirstSeen == Epoch && first.LastSeen == Epoch,
+            "A connection without data must still create a timed observation.");
+        now = now.AddSeconds(10);
+        tracker.Record(true, Local, Remote, 50);
+        now = now.AddSeconds(10);
+        tracker.RecordConnection(Local, Remote);
+        var peer = tracker.Snapshot().Single();
+        Assert(peer.ConnectionCount == 2 && peer.SentBytes == 50 && peer.FirstSeen == Epoch && peer.LastSeen == now,
+            "Connection activity failed to update last time or moved the first observation time.");
+        now = Epoch.AddDays(-1);
+        tracker.RecordConnection(Local, Remote);
+        Assert(tracker.Snapshot().Single().LastSeen == Epoch.AddSeconds(20), "A backward wall clock moved the last connection time backwards.");
+    }
+
+    private static void ConnectionsUseSelectionNormalizationAndCapacity()
+    {
+        var tracker = new TcpPeerTracker(maxPeers: 1);
+        tracker.RecordConnection(Local, Remote);
+        tracker.SetLocalAddresses([Local.MapToIPv6()]);
+        tracker.RecordConnection(Local, Remote.MapToIPv6());
+        tracker.RecordConnection(Local.MapToIPv6(), Remote);
+        tracker.RecordConnection(IPAddress.Parse("192.0.2.99"), Remote);
+        tracker.RecordConnection(Local, IPAddress.Any);
+        tracker.RecordConnection(null!, Remote);
+        tracker.RecordConnection(Local, null!);
+        tracker.RecordConnection(Local, IPAddress.Parse("224.0.0.1"));
+        tracker.RecordConnection(Local, IPAddress.IPv6Loopback);
+        tracker.RecordConnection(Local, IPAddress.Parse("198.51.100.21"));
+        var peer = tracker.Snapshot().Single();
+        Assert(peer.RemoteAddress == Remote.ToString() && peer.ConnectionCount == 2 && tracker.DroppedEvents == 1,
+            "Connection filtering, mapped addresses, or capacity behavior differed from data observations.");
+        tracker.SetLocalAddresses([IPAddress.Parse("fe80::10%5")]);
+        tracker.RecordConnection(IPAddress.Parse("fe80::10"), IPAddress.Parse("fe80::20%9"));
+        tracker.RecordConnection(IPAddress.Parse("fe80::10%99"), IPAddress.Parse("fe80::20"));
+        Assert(tracker.Snapshot().Single().RemoteAddress == "fe80::20" && tracker.Snapshot().Single().ConnectionCount == 2
+            && tracker.DroppedEvents == 0, "Connection reset or IPv6 scope normalization failed.");
     }
 
     private static void Assert(bool condition, string message)

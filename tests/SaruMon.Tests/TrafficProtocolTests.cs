@@ -64,6 +64,11 @@ internal static class TrafficProtocolTests
         Reject(() => TrafficWireProtocol.ValidateSnapshot(tcp with { TcpPeers = null }, MonitoringMode.Tcp), "missing peer array");
         Reject(() => TrafficWireProtocol.ValidateSnapshot(tcp with { TcpPeers = [peer with { SentBytes = -1 }] }, MonitoringMode.Tcp), "negative sent count");
         Reject(() => TrafficWireProtocol.ValidateSnapshot(tcp with { TcpPeers = [peer with { ReceivedBytes = -1 }] }, MonitoringMode.Tcp), "negative received count");
+        Reject(() => TrafficWireProtocol.ValidateSnapshot(tcp with { TcpPeers = [peer with { ConnectionCount = -1 }] }, MonitoringMode.Tcp), "negative connection count");
+        var connected = tcp with { TcpPeers = [peer with { SentBytes = 0, ReceivedBytes = 0, ConnectionCount = long.MaxValue }] };
+        var roundTrip = TrafficWireProtocol.Deserialize(JsonSerializer.Serialize(connected, TrafficWireProtocol.JsonOptions));
+        TrafficWireProtocol.ValidateSnapshot(roundTrip, MonitoringMode.Tcp);
+        Check(roundTrip.TcpPeers![0].ConnectionCount == long.MaxValue, "connection-only peer and exact connection count survive IPC");
         Reject(() => TrafficWireProtocol.ValidateSnapshot(tcp with { TcpPeers = [peer with { RemoteAddress = "host.example" }] }, MonitoringMode.Tcp), "peer hostname is not an address");
         Reject(() => TrafficWireProtocol.ValidateSnapshot(tcp with { TcpPeers = [peer with { FirstSeen = now.AddSeconds(1) }] }, MonitoringMode.Tcp), "TCP observation time order");
         Reject(() => TrafficWireProtocol.ValidateSnapshot(tcp with { TcpPeers = Enumerable.Repeat(peer, TrafficWireProtocol.MaxEntries + 1).ToArray() }, MonitoringMode.Tcp), "oversize peer array");
@@ -101,9 +106,9 @@ internal static class TrafficProtocolTests
             var name = "SaruMon-Monitor-" + Guid.NewGuid().ToString("N");
             using var namedServer = TrafficProcessSecurity.CreateServer(name);
             using var client = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
-            var connected = namedServer.WaitForConnectionAsync(timeout.Token);
+            var pipeConnected = namedServer.WaitForConnectionAsync(timeout.Token);
             client.ConnectAsync(timeout.Token).GetAwaiter().GetResult();
-            connected.GetAwaiter().GetResult();
+            pipeConnected.GetAwaiter().GetResult();
             TrafficProcessSecurity.VerifyClient(namedServer, process.Id);
             TrafficProcessSecurity.VerifyServer(client, process, process.StartTime.ToUniversalTime().Ticks);
             Check(true, "explicit current-user ACL and bidirectional peer PID validation");

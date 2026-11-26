@@ -17,12 +17,14 @@ internal static class TcpLogExporter
             using (var writer = new StreamWriter(stream, new UTF8Encoding(true)))
             {
                 writer.NewLine = "\r\n";
-                WriteRow(writer, ["相手IP", "相手名", "上り合計（バイト）", "下り合計（バイト）"]);
+                WriteRow(writer, ["相手IP", "相手名", "上り合計（バイト）", "下り合計（バイト）", "接続回数", "開始時刻", "最終時刻"]);
                 foreach (var peer in peers)
                 {
                     var host = names is not null && names.TryGetValue(peer.RemoteAddress, out var value) ? value : "";
                     WriteRow(writer, [peer.RemoteAddress, host, peer.SentBytes.ToString(CultureInfo.InvariantCulture),
-                        peer.ReceivedBytes.ToString(CultureInfo.InvariantCulture)]);
+                        peer.ReceivedBytes.ToString(CultureInfo.InvariantCulture), peer.ConnectionCount.ToString(CultureInfo.InvariantCulture),
+                        peer.FirstSeen.ToLocalTime().ToString("O", CultureInfo.InvariantCulture),
+                        peer.LastSeen.ToLocalTime().ToString("O", CultureInfo.InvariantCulture)]);
                 }
             }
             // A failed write never replaces the user's existing CSV with a partial log.

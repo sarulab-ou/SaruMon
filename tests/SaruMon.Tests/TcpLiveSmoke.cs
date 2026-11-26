@@ -26,20 +26,42 @@ internal static class TcpLiveSmoke
 
             // Different local/remote ports on two connections must merge into a single peer row.
             foreach (var group in groups) await group.ExchangeAsync(96, 160, timeout.Token);
-            await WaitForTotalsAsync();
-            var before = groups.Select(group => Find(group)).ToArray();
+            await WaitForTotalsAsync(192, 320, 0);
+            var baseline = groups.Select(group => Find(group)).ToArray();
             for (var index = 0; index < groups.Count; index++)
             {
                 var group = groups[index];
-                var peer = before[index];
+                var peer = baseline[index];
                 if (monitor.TcpSnapshot.Count(item => item.RemoteAddress == group.RemoteAddress.ToString()) != 1)
                     throw new InvalidOperationException("Ports were not aggregated into one peer.");
                 if (peer.FirstSeen == default || peer.LastSeen < peer.FirstSeen)
                     throw new InvalidOperationException("Invalid TCP first/last timestamp.");
                 if (!group.BothEndsSelected && (peer.SentBytes != 192 || peer.ReceivedBytes != 320))
                     throw new InvalidOperationException($"TCP upload/download direction mismatch: {peer.SentBytes}/{peer.ReceivedBytes}.");
+                if (peer.ConnectionCount != 0)
+                    throw new InvalidOperationException("A connection established before monitoring was counted.");
             }
             if (monitor.UdpSnapshot.Count != 0) throw new InvalidOperationException("TCP monitoring exposed UDP rows.");
+
+            // A refused attempt must not be mistaken for an observed Connect/Accept.
+            foreach (var group in groups) await group.AttemptRefusedConnectionAsync(timeout.Token);
+            // Two new connections per peer: IPv4 selects the client side only, while IPv6
+            // selects both ::1 endpoints and therefore observes two Connect + two Accept events.
+            foreach (var group in groups) await group.ConnectAsync(timeout.Token);
+            // Exercise all four connections, preserving bytes already seen on the initial two.
+            foreach (var group in groups) await group.ExchangeAsync(96, 160, timeout.Token);
+            await WaitForTotalsAsync(576, 960, 2);
+            var before = groups.Select(group => Find(group)).ToArray();
+            for (var index = 0; index < groups.Count; index++)
+            {
+                var group = groups[index];
+                var peer = before[index];
+                var expectedConnections = group.BothEndsSelected ? 4 : 2;
+                if (peer.ConnectionCount != expectedConnections)
+                    throw new InvalidOperationException($"TCP connection count mismatch: {peer.ConnectionCount}, expected {expectedConnections}.");
+                if (peer.FirstSeen != baseline[index].FirstSeen || peer.LastSeen <= baseline[index].LastSeen)
+                    throw new InvalidOperationException("TCP connection/data events did not preserve first time and advance last time.");
+            }
 
             // Receive application data first, then stop immediately, requiring the final ETW buffer drain.
             foreach (var group in groups) await group.SendTailAsync(80, timeout.Token);
@@ -51,27 +73,29 @@ internal static class TcpLiveSmoke
                 var peer = Find(group);
                 var expectedReceive = before[index].ReceivedBytes + (group.BothEndsSelected ? 80 : 0);
                 if (peer.FirstSeen != before[index].FirstSeen || peer.SentBytes < before[index].SentBytes + 80
-                    || peer.ReceivedBytes < expectedReceive)
-                    throw new InvalidOperationException("TCP final snapshot lost traffic or changed FirstSeen.");
-                Console.WriteLine($"TCP {group.RemoteAddress}: upload={peer.SentBytes}, download={peer.ReceivedBytes}, first={peer.FirstSeen:O}, last={peer.LastSeen:O}");
+                    || peer.ReceivedBytes < expectedReceive || peer.LastSeen < before[index].LastSeen
+                    || peer.ConnectionCount != before[index].ConnectionCount)
+                    throw new InvalidOperationException("TCP final snapshot lost traffic, connection counts, or timestamps.");
+                Console.WriteLine($"TCP {group.RemoteAddress}: upload={peer.SentBytes}, download={peer.ReceivedBytes}, connections={peer.ConnectionCount}, first={peer.FirstSeen:O}, last={peer.LastSeen:O}");
             }
             if (monitor.Error is not null || monitor.DroppedEvents != 0)
                 throw new InvalidOperationException("TCP capture was partial: " + monitor.Error);
-            Console.WriteLine("PASS: TCP peer aggregation across ports, upload/download direction, first-seen time, final snapshot, and helper exit.");
+            Console.WriteLine("PASS: TCP peer aggregation, bidirectional bytes, observed connection counts, refused/previous connections excluded, first/last times, final snapshot, and helper exit.");
             return 0;
 
             TcpPeerInfo Find(PeerGroup group) => monitor.TcpSnapshot.SingleOrDefault(peer => peer.RemoteAddress == group.RemoteAddress.ToString())
                 ?? throw new InvalidOperationException("Missing TCP peer: " + group.RemoteAddress);
 
-            async Task WaitForTotalsAsync()
+            async Task WaitForTotalsAsync(long sent, long received, long connections)
             {
                 using var observed = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token);
                 observed.CancelAfter(TimeSpan.FromSeconds(12));
                 while (groups.Any(group =>
                     {
                         var peer = monitor.TcpSnapshot.FirstOrDefault(item => item.RemoteAddress == group.RemoteAddress.ToString());
-                        return peer is null || peer.SentBytes < (group.BothEndsSelected ? 512 : 192)
-                            || peer.ReceivedBytes < (group.BothEndsSelected ? 512 : 320);
+                        return peer is null || peer.SentBytes < (group.BothEndsSelected ? sent + received : sent)
+                            || peer.ReceivedBytes < (group.BothEndsSelected ? sent + received : received)
+                            || peer.ConnectionCount < (group.BothEndsSelected ? 2 * connections : connections);
                     }))
                 {
                     if (!monitor.IsRunning) throw new InvalidOperationException(monitor.Error ?? "TCP monitoring ended before observation.");
@@ -101,7 +125,7 @@ internal static class TcpLiveSmoke
     {
         Console.Error.WriteLine($"TCP {stage}: running={monitor.IsRunning}, peers={monitor.TcpSnapshot.Count}, dropped={monitor.DroppedEvents}, error={monitor.Error ?? "(none)"}");
         foreach (var peer in monitor.TcpSnapshot)
-            Console.Error.WriteLine($"TCP peer {peer.RemoteAddress}: upload={peer.SentBytes}, download={peer.ReceivedBytes}, first={peer.FirstSeen:O}, last={peer.LastSeen:O}");
+            Console.Error.WriteLine($"TCP peer {peer.RemoteAddress}: upload={peer.SentBytes}, download={peer.ReceivedBytes}, connections={peer.ConnectionCount}, first={peer.FirstSeen:O}, last={peer.LastSeen:O}");
     }
 
     private sealed class PeerGroup : IDisposable
@@ -144,6 +168,17 @@ internal static class TcpLiveSmoke
                 await TransferAsync(pair.Sender, pair.Receiver, sent, token);
                 await TransferAsync(pair.Receiver, pair.Sender, received, token);
             }
+        }
+
+        internal async Task AttemptRefusedConnectionAsync(CancellationToken token)
+        {
+            // Reserving a local port without listening avoids accidentally reaching another service.
+            using var reserved = new Socket(RemoteAddress.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+            reserved.Bind(new IPEndPoint(RemoteAddress, 0));
+            using var sender = new TcpClient(new IPEndPoint(LocalAddress, 0));
+            try { await sender.ConnectAsync(RemoteAddress, ((IPEndPoint)reserved.LocalEndPoint!).Port, token); }
+            catch (SocketException exception) when (exception.SocketErrorCode == SocketError.ConnectionRefused) { return; }
+            throw new InvalidOperationException("A non-listening TCP port accepted a connection.");
         }
 
         internal Task SendTailAsync(int size, CancellationToken token) => TransferAsync(pairs[0].Sender, pairs[0].Receiver, size, token);

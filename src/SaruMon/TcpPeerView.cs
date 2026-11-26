@@ -65,11 +65,22 @@ internal sealed class TcpPeerView : UserControl
         AddColumn("HostName", "相手名（逆引き）", 180, fill: true);
         AddColumn("SentBytes", "上り合計（バイト）", 155);
         AddColumn("ReceivedBytes", "下り合計（バイト）", 155);
-        foreach (var column in new[] { "SentBytes", "ReceivedBytes" })
+        AddColumn("ConnectionCount", "接続回数", 100);
+        AddColumn("FirstSeen", "開始時刻", 135);
+        AddColumn("LastSeen", "最終時刻", 135);
+        foreach (var column in new[] { "SentBytes", "ReceivedBytes", "ConnectionCount" })
         {
             grid.Columns[column]!.ValueType = typeof(long);
             grid.Columns[column]!.DefaultCellStyle.Format = "N0";
         }
+        foreach (var column in new[] { "FirstSeen", "LastSeen" })
+        {
+            grid.Columns[column]!.ValueType = typeof(DateTimeOffset);
+            grid.Columns[column]!.DefaultCellStyle.Format = "MM/dd HH:mm:ss";
+        }
+        grid.Columns["ConnectionCount"]!.HeaderCell.ToolTipText = "監視開始後に観測した Connect / Accept イベント数です。監視前のイベントは含みません。";
+        grid.Columns["FirstSeen"]!.HeaderCell.ToolTipText = "監視中、その相手の接続イベントまたは通信を最初に観測した時刻です。";
+        grid.Columns["LastSeen"]!.HeaderCell.ToolTipText = "監視中、その相手の接続イベントまたは通信を最後に観測した時刻です。";
         grid.Columns["HostName"]!.Visible = false;
         layout.Controls.Add(grid, 0, 1);
         status.Text = "停止中 · 「開始」で相手ごとの TCP 送受信量を観測します。";
@@ -78,7 +89,7 @@ internal sealed class TcpPeerView : UserControl
         {
             Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft,
             ForeColor = Color.FromArgb(104, 116, 134),
-            Text = "開始後の TCP 送受信量を相手 IP ごとに合算します。ポートや接続が異なっても同じ相手にまとめます。\n停止後も保存できます。新しく開始するかインタフェースを変えると集計を消去します。\n逆引きは DNS に問い合わせます。取得済みの名前だけを CSV に保存し、未取得の場合は空欄にします。"
+            Text = "同じ相手 IP の通信を合算します。接続回数は監視中に観測した接続イベント数です。\n開始・最終は最初と最後の観測時刻です。監視前からの接続は回数に含めません。\n停止後も保存できます。再開・インタフェース変更で記録を消去します。"
         }, 0, 3);
         Controls.Add(layout);
         start.Click += async (_, _) => await StartMonitoringAsync();
@@ -372,7 +383,8 @@ internal sealed class TcpPeerView : UserControl
             foreach (var item in peers)
             {
                 var index = grid.Rows.Add(item.RemoteAddress, reverse.Checked ? NameFor(item.RemoteAddress) : "",
-                    item.SentBytes, item.ReceivedBytes);
+                    item.SentBytes, item.ReceivedBytes, item.ConnectionCount,
+                    item.FirstSeen.ToLocalTime(), item.LastSeen.ToLocalTime());
                 grid.Rows[index].Tag = item;
             }
             if (sorted is not null && sorted.Visible && grid.Rows.Count > 0) grid.Sort(sorted, direction);

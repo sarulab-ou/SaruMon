@@ -16,15 +16,18 @@ internal static class TcpLogTests
         {
             CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("de-DE");
             var first = DateTimeOffset.Parse("2026-01-02T03:04:05+09:00", CultureInfo.InvariantCulture);
-            var peer = new TcpPeerInfo("198.51.100.2", 1234, 5678, first, first.AddMinutes(1));
+            var peer = new TcpPeerInfo("198.51.100.2", 1234, 5678, first, first.AddMinutes(1), 2);
             TcpLogExporter.Write(path, [peer], new Dictionary<string, string> { [peer.RemoteAddress] = "test,\"name\"\nsecond line" });
             Assert(File.ReadAllBytes(path).Take(3).SequenceEqual(new byte[] { 0xef, 0xbb, 0xbf }), "UTF-8 BOM missing.");
             var rows = ReadCsv(File.ReadAllText(path));
-            Assert(rows.Count == 2 && rows.All(row => row.Count == 4)
-                && rows[0].SequenceEqual(new[] { "相手IP", "相手名", "上り合計（バイト）", "下り合計（バイト）" }),
-                "TCP export must contain exactly the four requested columns.");
+            Assert(rows.Count == 2 && rows.All(row => row.Count == 7)
+                && rows[0].SequenceEqual(new[] { "相手IP", "相手名", "上り合計（バイト）", "下り合計（バイト）", "接続回数", "開始時刻", "最終時刻" }),
+                "TCP export must contain exactly the seven requested columns.");
             Assert(rows[1][0] == peer.RemoteAddress && rows[1][1] == "test,\"name\"\nsecond line", "IP/name quoting lost data or split a row.");
             Assert(rows[1][2] == "1234" && rows[1][3] == "5678", "Upload/download totals were exchanged or formatted with locale separators.");
+            Assert(rows[1][4] == "2" && DateTimeOffset.Parse(rows[1][5], CultureInfo.InvariantCulture) == first
+                && DateTimeOffset.Parse(rows[1][6], CultureInfo.InvariantCulture) == first.AddMinutes(1),
+                "Connection count or first/last timestamps were lost or changed.");
             TcpLogExporter.Write(path, [peer], new Dictionary<string, string> { [peer.RemoteAddress] = " @SUM(1,2)" });
             Assert(ReadCsv(File.ReadAllText(path))[1][1] == "' @SUM(1,2)", "Untrusted hostname may execute as a spreadsheet formula.");
             TcpLogExporter.Write(path, [peer with { SentBytes = 2000 }]);
@@ -40,7 +43,7 @@ internal static class TcpLogTests
                 "Failed export damaged the existing file or left temporary content.");
             TcpLogExporter.Write(path, []);
             Assert(ReadCsv(File.ReadAllText(path)).Count == 1, "Empty exports must preserve their header.");
-            return 8;
+            return 9;
         }
         finally
         {

@@ -9,7 +9,8 @@ public sealed record TcpPeerInfo(
     long SentBytes,
     long ReceivedBytes,
     DateTimeOffset FirstSeen,
-    DateTimeOffset LastSeen);
+    DateTimeOffset LastSeen,
+    long ConnectionCount = 0);
 
 /// <summary>
 /// Session totals for each remote TCP address across all connections and ports.
@@ -60,7 +61,18 @@ public sealed class TcpPeerTracker
     /// local/remote orientation for both send and receive; ports intentionally do
     /// not form part of the key. Invalid input is ignored without affecting totals.
     /// </summary>
-    public void Record(bool isSend, IPAddress local, IPAddress remote, int bytes)
+    public void Record(bool isSend, IPAddress local, IPAddress remote, int bytes) =>
+        RecordEvent(isSend, local, remote, bytes);
+
+    /// <summary>
+    /// Records one observed connect/accept event. Data events never
+    /// imply a new connection, so connections established before monitoring are
+    /// not guessed from traffic. The local/remote orientation matches Record.
+    /// </summary>
+    public void RecordConnection(IPAddress local, IPAddress remote) =>
+        RecordEvent(null, local, remote, 0);
+
+    private void RecordEvent(bool? isSend, IPAddress local, IPAddress remote, int bytes)
     {
         if (bytes < 0 || !TryNormalize(local, out var localKey) || !TryNormalize(remote, out var remoteKey)
             || !localKey.IsUnicast || !remoteKey.IsUnicast || localKey.IsIpv4 != remoteKey.IsIpv4)
@@ -96,7 +108,7 @@ public sealed class TcpPeerTracker
             {
                 var entry = node.Value;
                 snapshot.Add(new TcpPeerInfo(entry.RemoteAddress, entry.SentBytes, entry.ReceivedBytes,
-                    entry.FirstSeen, entry.LastSeen));
+                    entry.FirstSeen, entry.LastSeen, entry.ConnectionCount));
             }
             return snapshot;
         }
@@ -148,7 +160,7 @@ public sealed class TcpPeerTracker
 
     private sealed class PeerEntry
     {
-        public PeerEntry(string remoteAddress, bool isSend, int bytes, DateTimeOffset firstSeen)
+        public PeerEntry(string remoteAddress, bool? isSend, int bytes, DateTimeOffset firstSeen)
         {
             RemoteAddress = remoteAddress;
             FirstSeen = firstSeen;
@@ -159,13 +171,15 @@ public sealed class TcpPeerTracker
         public string RemoteAddress { get; }
         public long SentBytes { get; set; }
         public long ReceivedBytes { get; set; }
+        public long ConnectionCount { get; set; }
         public DateTimeOffset FirstSeen { get; }
         public DateTimeOffset LastSeen { get; private set; }
         public LinkedListNode<PeerEntry> Node { get; }
 
-        public void Observe(bool isSend, int bytes, DateTimeOffset now)
+        public void Observe(bool? isSend, int bytes, DateTimeOffset now)
         {
-            if (isSend) SentBytes = SaturatingAdd(SentBytes, bytes);
+            if (isSend is null) ConnectionCount = SaturatingAdd(ConnectionCount, 1);
+            else if (isSend.Value) SentBytes = SaturatingAdd(SentBytes, bytes);
             else ReceivedBytes = SaturatingAdd(ReceivedBytes, bytes);
             LastSeen = now;
         }

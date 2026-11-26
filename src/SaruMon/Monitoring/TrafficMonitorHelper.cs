@@ -67,6 +67,12 @@ internal static class TrafficMonitorHelper
                 // kerneltraceeventparser.mof TcpIp_TypeGroup1/3 descriptions.
                 source.Kernel.TcpIpRecv += data => tcpTracker.Record(false, data.saddr, data.daddr, data.size);
                 source.Kernel.TcpIpRecvIPV6 += data => tcpTracker.Record(false, data.saddr, data.daddr, data.size);
+                // Count observed Connect/Accept events, never data packets or retries.
+                // TypeGroup2/4 use the same local/remote socket orientation.
+                source.Kernel.TcpIpConnect += data => tcpTracker.RecordConnection(data.saddr, data.daddr);
+                source.Kernel.TcpIpConnectIPV6 += data => tcpTracker.RecordConnection(data.saddr, data.daddr);
+                source.Kernel.TcpIpAccept += data => tcpTracker.RecordConnection(data.saddr, data.daddr);
+                source.Kernel.TcpIpAcceptIPV6 += data => tcpTracker.RecordConnection(data.saddr, data.daddr);
             }
             consumer = Task.Run(() => source.Process(), CancellationToken.None);
             await channel.WriteAsync(new TrafficMessage("ready", Revision: revision, Mode: arguments.Mode), handshake.Token).ConfigureAwait(false);

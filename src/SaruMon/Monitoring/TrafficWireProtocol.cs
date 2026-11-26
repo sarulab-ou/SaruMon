@@ -57,7 +57,7 @@ internal static class TrafficWireProtocol
                 throw new InvalidDataException("TCP 監視データが不正です。");
             foreach (var peer in message.TcpPeers)
             {
-                if (peer is null || peer.SentBytes < 0 || peer.ReceivedBytes < 0
+                if (peer is null || peer.SentBytes < 0 || peer.ReceivedBytes < 0 || peer.ConnectionCount < 0
                     || peer.FirstSeen == default || peer.LastSeen < peer.FirstSeen)
                     throw new InvalidDataException("TCP の集計が不正です。");
                 ParseAddress(peer.RemoteAddress);

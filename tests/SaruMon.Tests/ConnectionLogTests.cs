@@ -23,6 +23,7 @@ internal static class ConnectionLogTests
             Assert(File.ReadAllBytes(path).Take(3).SequenceEqual(new byte[] { 0xef, 0xbb, 0xbf }), "Excel-compatible UTF-8 BOM missing.");
             var rows = ReadCsv(File.ReadAllText(path));
             Assert(rows.Count == 2 && rows.All(row => row.Count == 12), "CSV record shape/escaped newlines changed.");
+            Assert(rows[0][7] == "開始時刻" && rows[0][8] == "最終時刻", "UDP export must label its first/last observation timestamps consistently.");
             Assert(rows[1][0] == "Wi-Fi,\"試験\"\n二行目", "Adapter name was not round-tripped.");
             Assert(rows[1][6] == "' =1+1", "CSV text can be interpreted as a spreadsheet formula.");
             Assert(DateTimeOffset.Parse(rows[1][7], CultureInfo.InvariantCulture) == first
@@ -41,7 +42,7 @@ internal static class ConnectionLogTests
                 "A failed export damaged the existing log or left a temporary file.");
             ConnectionLogExporter.Write(path, [], "Wi-Fi");
             Assert(ReadCsv(File.ReadAllText(path)).Count == 1, "Empty exports must retain their header.");
-            return 9;
+            return 10;
         }
         finally
         {

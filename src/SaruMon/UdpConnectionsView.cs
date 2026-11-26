@@ -65,10 +65,10 @@ internal sealed class UdpConnectionsView : UserControl
         AddColumn("RemoteIp", "送信先 IP", 150, fill: true);
         AddColumn("RemotePort", "宛先ポート", 90);
         AddColumn("HostName", "逆引きホスト名", 160, fill: true);
-        AddColumn("FirstSeen", "初回検出", 135);
+        AddColumn("FirstSeen", "開始時刻", 135);
         AddColumn("Bytes", "累積送信バイト", 125);
         AddColumn("Packets", "送信数", 90);
-        AddColumn("LastSeen", "最終検出", 135);
+        AddColumn("LastSeen", "最終時刻", 135);
         AddColumn("Local", "ローカル側", 170, fill: true);
         grid.Columns["RemotePort"]!.ValueType = typeof(int);
         foreach (var column in new[] { "Bytes", "Packets" })
@@ -80,6 +80,8 @@ internal sealed class UdpConnectionsView : UserControl
         grid.Columns["FirstSeen"]!.DefaultCellStyle.Format = "MM/dd HH:mm:ss";
         grid.Columns["LastSeen"]!.ValueType = typeof(DateTimeOffset);
         grid.Columns["LastSeen"]!.DefaultCellStyle.Format = "MM/dd HH:mm:ss";
+        grid.Columns["FirstSeen"]!.HeaderCell.ToolTipText = "この宛先への送信を監視中に最初に観測した時刻です。";
+        grid.Columns["LastSeen"]!.HeaderCell.ToolTipText = "この宛先への送信を監視中に最後に観測した時刻です。";
         grid.Columns["HostName"]!.Visible = false;
         layout.Controls.Add(grid, 0, 1);
         status.Text = "停止中 · 「開始」で UDP の送信先と送信量を観測します。";
@@ -88,7 +90,7 @@ internal sealed class UdpConnectionsView : UserControl
         {
             Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft,
             ForeColor = Color.FromArgb(104, 116, 134),
-            Text = "開始後の UDP 送信を宛先ごとに最大2,048件保持します。受信・開始前の通信は含みません。\n停止後も一覧を保存できます。新しく開始するかインタフェースを変えると集計を消去します。\n初回検出は観測で初めて見えた時刻です。逆引きは DNS に問い合わせ、名前は閲覧サイト名とは限りません。"
+            Text = "開始後の UDP 送信を宛先ごとに最大2,048件保持します。受信・開始前の通信は含みません。\n停止後も一覧を保存できます。新しく開始するかインタフェースを変えると集計を消去します。\n開始・最終は最初と最後の送信観測時刻です。逆引きの名前は閲覧サイト名とは限りません。"
         }, 0, 3);
         Controls.Add(layout);
         start.Click += async (_, _) => await StartMonitoringAsync();

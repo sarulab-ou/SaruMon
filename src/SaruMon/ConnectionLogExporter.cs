@@ -19,7 +19,7 @@ internal static class ConnectionLogExporter
             {
                 writer.NewLine = "\r\n";
                 WriteRow(writer, ["インタフェース", "プロトコル", "ローカルIP", "ローカルポート", "宛先IP", "宛先ポート",
-                    "逆引きホスト名", "初回検出時刻", "最終送信時刻", "総送信量（バイト）", "送信イベント数", "記録範囲"]);
+                    "逆引きホスト名", "開始時刻", "最終時刻", "総送信量（バイト）", "送信イベント数", "記録範囲"]);
                 foreach (var flow in flows)
                 {
                     var host = names is not null && names.TryGetValue(flow.RemoteAddress, out var value) ? value : "";
