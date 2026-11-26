@@ -37,7 +37,8 @@ internal sealed class AppSettings
         {
             using var key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
             if (value) key.SetValue("SaruMon", StartupCommand);
-            else key.DeleteValue("SaruMon", throwOnMissingValue: false);
+            else if (key.GetValue("SaruMon") is string existing && existing == StartupCommand)
+                key.DeleteValue("SaruMon", throwOnMissingValue: false);
         }
     }
 

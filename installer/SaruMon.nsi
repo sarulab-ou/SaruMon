@@ -17,7 +17,11 @@ Unicode true
 !define PRODUCT_ID "${INSTALLER_PROFILE}-Local-Install-v1"
 !define RUN_KEY "Software\Microsoft\Windows\CurrentVersion\Run"
 
-Name "SaruMon ${PRODUCT_VERSION}"
+!if "${INSTALLER_PROFILE}" == "SaruMon"
+  Name "SaruMon ${PRODUCT_VERSION}"
+!else
+  Name "SaruMon ${PRODUCT_VERSION}（検証用）"
+!endif
 OutFile "${OUTPUT_FILE}"
 InstallDir "$LOCALAPPDATA\Programs\${INSTALLER_PROFILE}"
 InstallDirRegKey HKCU "${APP_KEY}" "InstallDir"
@@ -34,14 +38,21 @@ VIAddVersionKey /LANG=1041 "LegalCopyright" "SaruMon contributors"
 !define MUI_ABORTWARNING
 !define MUI_ICON "../assets/SaruMon.ico"
 !define MUI_UNICON "../assets/SaruMon.ico"
-!define MUI_WELCOMEPAGE_TEXT "SaruMon を現在のユーザー用にインストールします。管理者権限は不要です。$\r$\n$\r$\n更新する場合は、通知領域の SaruMon アイコンを右クリックし、「終了」を選んでください。ウィンドウを閉じるだけでは終了しません。"
+!if "${INSTALLER_PROFILE}" == "SaruMon"
+  !define MUI_WELCOMEPAGE_TEXT "SaruMon を現在のユーザー用にインストールします。管理者権限は不要です。$\r$\n$\r$\n更新する場合は、通知領域の SaruMon アイコンを右クリックし、「終了」を選んでください。ウィンドウを閉じるだけでは終了しません。"
+!else
+  !define MUI_WELCOMEPAGE_TITLE "SaruMon セットアップ（検証用）"
+  !define MUI_WELCOMEPAGE_TEXT "これはインストーラーの検証用です。通常利用には正式な SaruMon セットアップを使用してください。$\r$\n$\r$\n検証用の登録名:$\r$\n${INSTALLER_PROFILE}$\r$\n$\r$\n完了画面からアプリは起動しません。"
+!endif
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
-!define MUI_FINISHPAGE_RUN "$INSTDIR\SaruMon.exe"
-!define MUI_FINISHPAGE_RUN_TEXT "SaruMon を起動する"
-!define MUI_FINISHPAGE_RUN_NOTCHECKED
+!if "${INSTALLER_PROFILE}" == "SaruMon"
+  !define MUI_FINISHPAGE_RUN "$INSTDIR\SaruMon.exe"
+  !define MUI_FINISHPAGE_RUN_TEXT "SaruMon を起動する"
+  !define MUI_FINISHPAGE_RUN_NOTCHECKED
+!endif
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
@@ -136,9 +147,39 @@ Section "SaruMon 本体（必須）" SEC_APP
   ${EndIf}
 SectionEnd
 
+Section "Windows ログイン時に起動" SEC_STARTUP
+  ClearErrors
+  WriteRegStr HKCU "${RUN_KEY}" "${INSTALLER_PROFILE}" '"$INSTDIR\SaruMon.exe" --tray'
+  ${If} ${Errors}
+    MessageBox MB_OK|MB_ICONSTOP "Windows ログイン時の起動を登録できませんでした。ユーザー設定への書き込み権限を確認してください。" /SD IDOK
+    SetErrorLevel 3
+    Abort
+  ${EndIf}
+SectionEnd
+
 Section /o "デスクトップショートカット" SEC_DESKTOP
   CreateShortcut "$DESKTOP\${INSTALLER_PROFILE}.lnk" "$INSTDIR\SaruMon.exe"
   WriteINIStr "$INSTDIR\SaruMon.install.ini" "Install" "DesktopShortcut" "1"
+SectionEnd
+
+Section "-Apply startup opt-out"
+  ; Deselected visible sections do not run. Apply an explicit opt-out here,
+  ; without removing the startup registration of a different installed/portable copy.
+  SectionGetFlags ${SEC_STARTUP} $0
+  IntOp $0 $0 & ${SF_SELECTED}
+  ${If} $0 == 0
+    ReadRegStr $0 HKCU "${RUN_KEY}" "${INSTALLER_PROFILE}"
+    StrCmpS $0 '"$INSTDIR\SaruMon.exe" --tray' 0 startup_option_done
+    ClearErrors
+    DeleteRegValue HKCU "${RUN_KEY}" "${INSTALLER_PROFILE}"
+    ${If} ${Errors}
+      MessageBox MB_OK|MB_ICONSTOP "Windows ログイン時の起動を解除できませんでした。ユーザー設定への書き込み権限を確認してください。" /SD IDOK
+      SetErrorLevel 3
+      Abort
+    ${EndIf}
+  ${EndIf}
+startup_option_done:
+  ClearErrors
 SectionEnd
 
 Function .onInit
@@ -155,10 +196,23 @@ Function .onInit
   ${IfNot} ${Errors}
     SectionSetFlags ${SEC_DESKTOP} ${SF_SELECTED}
   ${EndIf}
+  ClearErrors
+  ${GetOptions} $0 "/NoStartup" $1
+  ${IfNot} ${Errors}
+    SectionSetFlags ${SEC_STARTUP} 0
+  ${EndIf}
+!if "${INSTALLER_PROFILE}" != "SaruMon"
+  ; Interactive inspection must not schedule a test copy for the next login.
+  ; Silent integration tests retain the production default to exercise registration.
+  IfSilent test_profile_startup_done
+  SectionSetFlags ${SEC_STARTUP} 0
+test_profile_startup_done:
+!endif
 FunctionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
-  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_APP} "通信モニターと .NET Runtime をインストールします。Windows ログイン時の起動は、インストール後にアプリから設定できます。"
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_APP} "通信モニターと .NET Runtime をインストールします。"
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_STARTUP} "次回の Windows ログインから通知領域で SaruMon を起動します。インストール後もアプリから変更できます。"
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_DESKTOP} "現在のユーザーのデスクトップにショートカットを作成します。"
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 

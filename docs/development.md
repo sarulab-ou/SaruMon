@@ -55,12 +55,22 @@ dotnet run --project tests/SaruMon.Tests/SaruMon.Tests.csproj --configuration Re
 | `artifacts/publish/win-x64/SaruMon.exe` | 配布用の単一 EXE |
 | `artifacts/SaruMon-win-x64.zip` | ポータブル版・アプリ内更新用 |
 | `artifacts/SaruMon-win-x64.zip.sha256` | アプリ内更新で照合するハッシュ |
-| `artifacts/SaruMon-0.1.1-Setup-x64.exe` | v0.1.1 インストーラー |
-| `artifacts/SaruMon-0.1.1-SHA256SUMS.txt` | v0.1.1 インストーラーの SHA-256 |
+| `artifacts/SaruMon-0.1.2-Setup-x64.exe` | v0.1.2 インストーラー |
+| `artifacts/SaruMon-0.1.2-SHA256SUMS.txt` | v0.1.2 インストーラーの SHA-256 |
 
 ビルド成果物は Git に追加しません。公開手順は [releasing.md](releasing.md) を参照してください。
 
 アプリアイコンの描画を変更した場合は、Windows 上で `./scripts/generate-icon.ps1` を実行し、`assets/SaruMon.ico` を再生成します。通常のビルドでは再生成は不要です。
+
+## インストーラーの自動起動設定
+
+「Windows ログイン時に起動」コンポーネントは既定で選択され、現在のユーザーのログイン時にインストール先の `SaruMon.exe --tray` を実行するよう登録します。対話形式ではチェックを外せます。サイレントインストールで登録を無効にする場合は `/NoStartup` を指定します。
+
+```powershell
+Start-Process -FilePath '.\artifacts\SaruMon-0.1.2-Setup-x64.exe' -ArgumentList '/S', '/NoStartup' -WindowStyle Hidden -Wait
+```
+
+ZIP 版はアプリ内で自動起動を有効にします。インストーラーの自動起動登録は、Windows の通知領域でアイコンを常時表示する設定を変更しません。表示位置は起動後に利用者が調整します。
 
 ## 構成
 

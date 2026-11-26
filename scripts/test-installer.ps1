@@ -18,6 +18,7 @@ $notOwned = Join-Path $testRoot 'unowned'
 $programs = Join-Path ([Environment]::GetFolderPath('Programs')) $profile
 $desktopShortcut = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) "$profile.lnk"
 $settingsDirectory = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) $profile
+$defaultInstallPath = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) "Programs/$profile"
 $settingsSentinel = Join-Path $settingsDirectory 'settings.json'
 $appKey = "Software\$profile"
 $uninstallKey = "Software\Microsoft\Windows\CurrentVersion\Uninstall\$profile"
@@ -46,12 +47,18 @@ function Production-Snapshot {
         Startup = (Read-Value $runKey 'SaruMon')
     } -Compress
 }
-function Run-Setup([string]$Directory, [bool]$Desktop = $false) {
+function Run-Setup([string]$Directory, [bool]$Desktop = $false, [bool]$NoStartup = $false) {
+    $resolvedDirectory = [IO.Path]::GetFullPath($Directory)
+    $allowedRoot = [IO.Path]::GetFullPath($testRoot).TrimEnd('\') + '\'
+    if (!$resolvedDirectory.StartsWith($allowedRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Installer tests may target only this invocation''s artifacts/installer-tests directory.'
+    }
     $info = [Diagnostics.ProcessStartInfo]::new($installerPath)
     $info.UseShellExecute = $false
     $info.CreateNoWindow = $true
     # NSIS /D= must be the last, unquoted remainder, including spaces.
-    $info.Arguments = '/S ' + $(if ($Desktop) { '/DesktopShortcut ' } else { '' }) + '/D=' + $Directory
+    $info.Arguments = '/S ' + $(if ($Desktop) { '/DesktopShortcut ' } else { '' }) +
+        $(if ($NoStartup) { '/NoStartup ' } else { '' }) + '/D=' + $resolvedDirectory
     $process = [Diagnostics.Process]::Start($info)
     try {
         if (!$process.WaitForExit(60000)) { throw 'Installer timed out.' }
@@ -85,7 +92,7 @@ function Pass([string]$Description) {
 try {
     # Every external name is generated per run. Never install the production profile in tests.
     Assert ($profile -match '^SaruMon-InstallerTest-[a-f0-9]{32}$') 'Invalid isolated profile.'
-    foreach ($path in @($testRoot, $programs, $desktopShortcut, $settingsDirectory)) {
+    foreach ($path in @($testRoot, $programs, $desktopShortcut, $settingsDirectory, $defaultInstallPath)) {
         Assert (!(Test-Path -LiteralPath $path)) "Test path unexpectedly exists: $path"
     }
     Assert ($null -eq (Read-Value $appKey 'InstallDir')) 'Test registry key unexpectedly exists.'
@@ -99,6 +106,7 @@ try {
 
     Assert ((Run-Setup $installPath $true) -eq 0) 'Silent installation failed.'
     $exe = Join-Path $installPath 'SaruMon.exe'
+    $expectedStartup = '"' + $exe + '" --tray'
     $marker = Join-Path $installPath 'SaruMon.install.ini'
     Assert (Test-Path -LiteralPath $exe -PathType Leaf) 'Installed executable is missing.'
     Assert ((Get-FileHash -LiteralPath $exe).Hash -eq (Get-FileHash -LiteralPath (Join-Path $repoRoot 'artifacts/publish/win-x64/SaruMon.exe')).Hash) 'Installed executable differs from the published payload.'
@@ -110,6 +118,7 @@ try {
     Assert ((Read-Value $appKey 'InstallDir') -eq $installPath) 'InstallDir registration is missing.'
     Assert ((Read-Value $uninstallKey 'DisplayVersion') -eq $version) 'Uninstall version is wrong.'
     Assert ((Read-Value $uninstallKey 'QuietUninstallString') -eq ('"' + (Join-Path $installPath 'Uninstall.exe') + '" /S')) 'Quiet uninstall command is not correctly quoted.'
+    Assert ((Read-Value $runKey $profile) -ceq $expectedStartup) 'Default startup registration must use the quoted installed path and --tray.'
     Assert (Test-Path -LiteralPath $desktopShortcut) 'Optional desktop shortcut was not created.'
     $shell = New-Object -ComObject WScript.Shell
     try {
@@ -122,7 +131,7 @@ try {
         }
     }
     finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) }
-    Pass 'silent install, payload/documentation, registration, Start menu and optional desktop shortcuts'
+    Pass 'silent install, payload/documentation, default startup, registration and shortcuts'
 
     $unknownFile = Join-Path $installPath 'keep-user-file.txt'
     [IO.File]::WriteAllText($unknownFile, 'Preserve this unrelated file.')
@@ -152,7 +161,7 @@ try {
     $markerBackup = $null
     Pass 'invalid ownership marker blocks both setup and uninstall'
 
-    Write-Run ('"' + $exe + '" --tray')
+    Assert ((Read-Value $runKey $profile) -ceq $expectedStartup) 'Reinstall or rejected operations changed the default startup command.'
     $uninstallCode = Run-Uninstall
     Assert ($uninstallCode -eq 0) "Uninstallation failed (exit $uninstallCode; files: $((Get-ChildItem -LiteralPath $installPath -Force -ErrorAction SilentlyContinue).Name -join ', '))."
     Assert (Test-Path -LiteralPath $unknownFile) 'Uninstaller deleted an unrelated file.'
@@ -171,15 +180,29 @@ try {
     Remove-Item -LiteralPath $installPath
     Pass 'uninstall removes only known files and its own startup command; user files/settings survive'
 
-    Assert ((Run-Setup $installPath) -eq 0) 'Second installation failed.'
+    Assert ((Run-Setup $installPath $false $true) -eq 0) 'Installation with /NoStartup failed.'
     Assert (!(Test-Path -LiteralPath $desktopShortcut)) 'Desktop shortcut must be opt-in.'
+    Assert ($null -eq (Read-Value $runKey $profile)) '/NoStartup registered a startup command on a fresh install.'
+    Pass 'silent /NoStartup and default desktop option'
+
     $otherStartup = '"C:\Portable\SaruMon.exe" --tray'
+    Write-Run $otherStartup
+    Assert ((Run-Setup $installPath $false $true) -eq 0) 'Startup opt-out reinstallation failed.'
+    Assert ((Read-Value $runKey $profile) -ceq $otherStartup) 'Startup opt-out removed another copy''s startup command.'
+    Pass 'startup opt-out preserves another copy''s startup command'
+
+    Assert ((Run-Setup $installPath) -eq 0) 'Reinstallation with startup enabled failed.'
+    Assert ((Read-Value $runKey $profile) -ceq $expectedStartup) 'Default-selected startup did not register this copy.'
+    Assert ((Run-Setup $installPath $false $true) -eq 0) 'Reinstallation with startup disabled failed.'
+    Assert ($null -eq (Read-Value $runKey $profile)) 'Startup opt-out did not remove this copy''s exact command.'
+    Pass 'startup can be enabled and explicitly disabled for the same installed path'
+
     Write-Run $otherStartup
     Assert ((Run-Uninstall) -eq 0) 'Second uninstallation failed.'
     Assert ((Read-Value $runKey $profile) -eq $otherStartup) 'Uninstaller removed another copy''s startup command.'
     Remove-Run
     Assert (!(Test-Path -LiteralPath $installPath)) 'Uninstaller did not remove an otherwise empty installation folder.'
-    Pass 'default desktop option and preservation of another copy''s startup command'
+    Pass 'uninstall preserves another copy''s startup command'
 
     Assert ((Run-Setup $installPath) -eq 0) 'Partial-installation fixture could not be installed.'
     Remove-Item -LiteralPath (Join-Path $installPath 'SaruMon.exe'), (Join-Path $installPath 'README.md'), (Join-Path $installPath 'docs/development.md')
@@ -198,6 +221,7 @@ try {
     # against a real drive root: a regression would write outside this fixture.
     Pass 'nonempty unowned directory protection'
     Assert ((Production-Snapshot) -eq $before) 'Production SaruMon registration changed during isolated tests.'
+    Assert (!(Test-Path -LiteralPath $defaultInstallPath)) 'Installer unexpectedly used the default LocalAppData installation directory.'
     Pass 'production SaruMon registration remains unchanged'
     Write-Output "Installer integration tests passed: $passed groups."
 }

@@ -50,10 +50,11 @@ internal sealed class MainForm : Form
         file.DropDownItems.Add("終了(&X)", null, (_, _) => RequestExit());
         var help = new ToolStripMenuItem("ヘルプ(&H)");
         help.DropDownItems.Add("使い方", null, (_, _) => ShowHelp());
+        help.DropDownItems.Add("アイコンを常に表示するには", null, (_, _) => ShowTrayHelp());
         help.DropDownItems.Add("更新を確認(&U)…", null, (_, _) => OpenUpdates());
         help.DropDownItems.Add(new ToolStripSeparator());
         help.DropDownItems.Add("SaruMon について", null, (_, _) => MessageBox.Show(this,
-            $"SaruMon {UpdateService.CurrentVersion}\n\nインタフェースごとの通信量を通知領域で確認できます。\n受信・送信の量だけを読み取り、通信内容は取得しません。", "SaruMon について", MessageBoxButtons.OK, MessageBoxIcon.Information));
+            $"SaruMon {UpdateService.CurrentVersion}\n\nインタフェースごとの通信量を通知領域で確認できます。\n受信・送信の量だけを読み取り、通信内容は取得しません。\n\n実行場所:\n{Environment.ProcessPath}", "SaruMon について", MessageBoxButtons.OK, MessageBoxIcon.Information));
         menu.Items.AddRange([file, help]);
         MainMenuStrip = menu;
 
@@ -122,6 +123,7 @@ internal sealed class MainForm : Form
 
         var trayMenu = new ContextMenuStrip();
         trayMenu.Items.Add("SaruMon を開く", null, (_, _) => ShowFromTray());
+        trayMenu.Items.Add("アイコンを常に表示するには", null, (_, _) => { ShowFromTray(); ShowTrayHelp(); });
         trayMenu.Items.Add("更新を確認…", null, (_, _) => { ShowFromTray(); OpenUpdates(); });
         trayMenu.Items.Add(new ToolStripSeparator());
         trayMenu.Items.Add("終了", null, (_, _) => RequestExit());
@@ -229,7 +231,7 @@ internal sealed class MainForm : Form
         Hide();
         if (notified) return;
         notified = true;
-        tray.ShowBalloonTip(2500, "SaruMon は監視を続けています", "時計の近くの SaruMon アイコンをクリックすると、この画面を開けます。", ToolTipIcon.Info);
+        tray.ShowBalloonTip(2500, "SaruMon は監視を続けています", "アイコンが隠れている場合は、タスクバーの ∧ を開き、SaruMon を時計の近くへドラッグしてください。", ToolTipIcon.Info);
     }
 
     private void OpenUpdates()
@@ -238,8 +240,12 @@ internal sealed class MainForm : Form
         dialog.ShowDialog(this);
     }
 
+    private void ShowTrayHelp() => MessageBox.Show(this,
+        "1. タスクバー右端の ∧（隠れているアイコン）を開きます。\n2. SaruMon の丸い上下矢印アイコンを、時計の近くの通知領域へドラッグします。\n\nWindows の「タスクバーの設定 → その他のシステム トレイ アイコン」からも表示を選べます。同名の項目が複数ある場合は、動いているアイコンを直接ドラッグしてください。\n\nスタートアップ登録は、ログイン時にアプリを起動する設定です。アイコンを常に表示する設定とは別です。",
+        "SaruMon アイコンを常に表示する", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
     private void ShowHelp() => MessageBox.Show(this,
-        "1. 監視するインタフェースを選択します。\n2. 通知領域に格納すると、アイコンの色で通信を確認できます。\n\n緑: 受信 / 青: 送信 / 紫: 送受信 / 灰: 待機 / 橙: 未接続\n速度の単位はバイト/秒です（1 KiB = 1,024 B）。\n合計は現在のインタフェースを選択してからの通信量です。\n\nアイコンが見えない場合は、タスクバーの「隠れているインジケーター」から表示してください。\nアイコンのクリック、または SaruMon の再起動で画面が開きます。\n終了するには、メニューの「終了」を選びます。\n\n更新は「ヘルプ → 更新を確認」から実行できます。",
+        "1. 監視するインタフェースを選択します。\n2. 通知領域に格納すると、アイコンの色で通信を確認できます。\n\n緑: 受信 / 青: 送信 / 紫: 送受信 / 灰: 待機 / 橙: 未接続\n速度の単位はバイト/秒です（1 KiB = 1,024 B）。\n合計は現在のインタフェースを選択してからの通信量です。\n\nアイコンが隠れている場合は、タスクバー右端の ∧ を開き、SaruMon を時計の近くへドラッグしてください。\nアイコンのクリック、または SaruMon の再起動で画面が開きます。\n終了するには、メニューの「終了」を選びます。\n\n更新は「ヘルプ → 更新を確認」から実行できます。",
         "SaruMon の使い方", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
     public void RequestExit() { exiting = true; Close(); }
