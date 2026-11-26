@@ -12,21 +12,43 @@ $frames = [Collections.Generic.List[object]]::new()
 foreach ($size in @(16, 24, 32, 48, 64, 128, 256)) {
     $bitmap = [Drawing.Bitmap]::new($size, $size, [Drawing.Imaging.PixelFormat]::Format32bppArgb)
     $graphics = [Drawing.Graphics]::FromImage($bitmap)
-    $brush = [Drawing.SolidBrush]::new([Drawing.Color]::FromArgb(132, 80, 214))
-    $pen = [Drawing.Pen]::new([Drawing.Color]::White, 3)
-    $pen.StartCap = $pen.EndCap = [Drawing.Drawing2D.LineCap]::Round
-    $pen.LineJoin = [Drawing.Drawing2D.LineJoin]::Round
+    # Match TrafficIcons: a fixed neutral background and both arrows at maximum glow.
+    $background = [Drawing.SolidBrush]::new([Drawing.Color]::FromArgb(27, 32, 39))
+    $border = [Drawing.Pen]::new([Drawing.Color]::FromArgb(74, 83, 96), 1)
+    $receive = [Drawing.SolidBrush]::new([Drawing.Color]::FromArgb(77, 255, 153))
+    $send = [Drawing.SolidBrush]::new([Drawing.Color]::FromArgb(255, 98, 107))
+    $receiveGlow = [Drawing.Pen]::new([Drawing.Color]::FromArgb(110, 77, 255, 153), 2.4)
+    $sendGlow = [Drawing.Pen]::new([Drawing.Color]::FromArgb(110, 255, 98, 107), 2.4)
+    $receiveGlow.LineJoin = $sendGlow.LineJoin = [Drawing.Drawing2D.LineJoin]::Round
+    $backgroundPath = [Drawing.Drawing2D.GraphicsPath]::new()
+    $receivePath = [Drawing.Drawing2D.GraphicsPath]::new()
+    $sendPath = [Drawing.Drawing2D.GraphicsPath]::new()
     $stream = [IO.MemoryStream]::new()
     $frameWriter = [IO.BinaryWriter]::new($stream)
     try {
         $graphics.Clear([Drawing.Color]::Transparent)
         $graphics.SmoothingMode = [Drawing.Drawing2D.SmoothingMode]::AntiAlias
         $graphics.ScaleTransform($size / 32.0, $size / 32.0)
-        $graphics.FillEllipse($brush, 1, 1, 30, 30)
-        $graphics.DrawLine($pen, 11, 8, 11, 23)
-        $graphics.DrawLines($pen, [Drawing.PointF[]]@([Drawing.PointF]::new(6,18), [Drawing.PointF]::new(11,23), [Drawing.PointF]::new(16,18)))
-        $graphics.DrawLine($pen, 22, 24, 22, 9)
-        $graphics.DrawLines($pen, [Drawing.PointF[]]@([Drawing.PointF]::new(17,14), [Drawing.PointF]::new(22,9), [Drawing.PointF]::new(27,14)))
+        # Rounded rectangle (1, 1, 30, 30), corner radius 7 in the shared 32px geometry.
+        $backgroundPath.AddArc(1, 1, 14, 14, 180, 90)
+        $backgroundPath.AddArc(17, 1, 14, 14, 270, 90)
+        $backgroundPath.AddArc(17, 17, 14, 14, 0, 90)
+        $backgroundPath.AddArc(1, 17, 14, 14, 90, 90)
+        $backgroundPath.CloseFigure()
+        $graphics.FillPath($background, $backgroundPath)
+        $graphics.DrawPath($border, $backgroundPath)
+        $receivePath.AddPolygon([Drawing.PointF[]]@(
+            [Drawing.PointF]::new(9, 7), [Drawing.PointF]::new(13, 7),
+            [Drawing.PointF]::new(13, 18), [Drawing.PointF]::new(17, 18),
+            [Drawing.PointF]::new(11, 24), [Drawing.PointF]::new(5, 18), [Drawing.PointF]::new(9, 18)))
+        $sendPath.AddPolygon([Drawing.PointF[]]@(
+            [Drawing.PointF]::new(20, 25), [Drawing.PointF]::new(24, 25),
+            [Drawing.PointF]::new(24, 14), [Drawing.PointF]::new(28, 14),
+            [Drawing.PointF]::new(22, 8), [Drawing.PointF]::new(16, 14), [Drawing.PointF]::new(20, 14)))
+        $graphics.DrawPath($receiveGlow, $receivePath)
+        $graphics.FillPath($receive, $receivePath)
+        $graphics.DrawPath($sendGlow, $sendPath)
+        $graphics.FillPath($send, $sendPath)
         $graphics.Flush()
         $locked = $bitmap.LockBits([Drawing.Rectangle]::new(0, 0, $size, $size), [Drawing.Imaging.ImageLockMode]::ReadOnly, [Drawing.Imaging.PixelFormat]::Format32bppArgb)
         try {
@@ -53,7 +75,10 @@ foreach ($size in @(16, 24, 32, 48, 64, 128, 256)) {
         }
         $frames.Add(@{ Size = $size; Image = $stream.ToArray() })
     } finally {
-        $frameWriter.Dispose(); $stream.Dispose(); $pen.Dispose(); $brush.Dispose(); $graphics.Dispose(); $bitmap.Dispose()
+        $frameWriter.Dispose(); $stream.Dispose()
+        $sendPath.Dispose(); $receivePath.Dispose(); $backgroundPath.Dispose()
+        $sendGlow.Dispose(); $receiveGlow.Dispose(); $send.Dispose(); $receive.Dispose()
+        $border.Dispose(); $background.Dispose(); $graphics.Dispose(); $bitmap.Dispose()
     }
 }
 

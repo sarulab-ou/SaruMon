@@ -4,8 +4,11 @@ namespace SaruMon.Tests;
 
 internal static class Program
 {
+    [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--udp-helper")
+            return Udp.UdpMonitorHelper.RunAsync(args).GetAwaiter().GetResult();
         if (args.Length == 2 && args[0] == "--ipc-host")
         {
             using var instance = new SingleInstance(args[1]);
@@ -29,7 +32,18 @@ internal static class Program
         }
         try
         {
-            var count = TrafficTests.Run() + UpdateTests.Run() + SingleInstanceTests.Run() + InstallationTests.Run();
+            if (args.Length == 1 && args[0] == "--udp-live-smoke")
+                return UdpLiveSmoke.RunAsync().GetAwaiter().GetResult();
+            if (args.Length == 2 && args[0] == "--icon-preview")
+            {
+                TrafficIconsTests.WritePreview(args[1]);
+                Console.WriteLine("Icon preview: " + Path.GetFullPath(args[1]));
+                return 0;
+            }
+            var count = TrafficTests.Run() + TrafficIntensityTests.Run() + TrafficIconsTests.Run()
+                + TcpConnectionTests.Run() + ReverseDnsTests.Run() + UpdateTests.Run()
+                + UdpFlowTests.Run() + UdpProtocolTests.Run() + ConnectionLogTests.Run()
+                + SingleInstanceTests.Run() + InstallationTests.Run();
             Console.WriteLine($"PASS: {count} tests");
             return 0;
         }

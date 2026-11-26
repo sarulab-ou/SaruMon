@@ -116,6 +116,7 @@ Section "SaruMon 本体（必須）" SEC_APP
   File "../docs/development.md"
   File "../docs/releasing.md"
   File "../docs/verification.md"
+  File "../docs/third-party-notices.md"
   SetOutPath "$INSTDIR"
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "ファイルを配置できませんでした。SaruMon が終了していることと、保存先への書き込み権限を確認してください。" /SD IDOK
@@ -258,6 +259,8 @@ Section "Uninstall"
   Delete "$INSTDIR\docs\releasing.md"
   IfFileExists "$INSTDIR\docs\verification.md" 0 +2
   Delete "$INSTDIR\docs\verification.md"
+  IfFileExists "$INSTDIR\docs\third-party-notices.md" 0 +2
+  Delete "$INSTDIR\docs\third-party-notices.md"
   ${If} ${Errors}
     MessageBox MB_OK|MB_ICONSTOP "ファイルを削除できませんでした。SaruMon を終了してから再実行してください。" /SD IDOK
     SetErrorLevel 3

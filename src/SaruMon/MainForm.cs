@@ -22,10 +22,13 @@ internal sealed class MainForm : Form
     private readonly Label sendTotal = DetailLabel();
     private readonly Label footer = DetailLabel();
     private readonly TrafficGraph graph = new() { Dock = DockStyle.Fill, Margin = new Padding(0, 16, 0, 0) };
+    private readonly ConnectionsView connections = new();
+    private readonly UdpConnectionsView udpConnections = new();
     private readonly ToolTip tips = new();
     private readonly bool startHidden;
     private bool refreshing;
     private bool exiting;
+    private bool shuttingDown;
     private bool notified;
     private int tick;
 
@@ -36,12 +39,12 @@ internal sealed class MainForm : Form
         Name = "SaruMonMainWindow";
         AutoScaleMode = AutoScaleMode.Dpi;
         AutoScaleDimensions = new SizeF(96, 96);
-        ClientSize = new Size(800, 650);
-        MinimumSize = new Size(700, 620);
+        ClientSize = new Size(860, 700);
+        MinimumSize = new Size(800, 650);
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Color.FromArgb(245, 247, 251);
         ForeColor = Color.FromArgb(31, 44, 63);
-        Icon = icons[TrafficState.Idle];
+        Icon = icons.Idle;
 
         var menu = new MenuStrip { BackColor = Color.White, Padding = new Padding(12, 5, 0, 5) };
         var file = new ToolStripMenuItem("ファイル(&F)");
@@ -54,14 +57,13 @@ internal sealed class MainForm : Form
         help.DropDownItems.Add("更新を確認(&U)…", null, (_, _) => OpenUpdates());
         help.DropDownItems.Add(new ToolStripSeparator());
         help.DropDownItems.Add("SaruMon について", null, (_, _) => MessageBox.Show(this,
-            $"SaruMon {UpdateService.CurrentVersion}\n\nインタフェースごとの通信量を通知領域で確認できます。\n受信・送信の量だけを読み取り、通信内容は取得しません。\n\n実行場所:\n{Environment.ProcessPath}", "SaruMon について", MessageBoxButtons.OK, MessageBoxIcon.Information));
+            $"SaruMon {UpdateService.CurrentVersion}\n\nインタフェースごとの通信量、TCP 接続先、UDP 送信先の監視と CSV 保存ができます。\nパケットの内容は取得しません。\n\n実行場所:\n{Environment.ProcessPath}", "SaruMon について", MessageBoxButtons.OK, MessageBoxIcon.Information));
         menu.Items.AddRange([file, help]);
         MainMenuStrip = menu;
 
-        var body = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24, 12, 24, 14), ColumnCount = 1, RowCount = 9 };
-        foreach (var height in new[] { 64, 28, 40, 48, 112 }) body.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
+        var body = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24, 12, 24, 14), ColumnCount = 1, RowCount = 7 };
+        foreach (var height in new[] { 64, 28, 40, 48 }) body.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
         body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        body.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         body.RowStyles.Add(new RowStyle(SizeType.Absolute, 37));
         body.RowStyles.Add(new RowStyle(SizeType.Absolute, 27));
 
@@ -87,12 +89,26 @@ internal sealed class MainForm : Form
         rates.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         rates.Controls.Add(CreateRateCard("↓ 受信", TrafficIcons.ReceiveColor, receiveRate, receiveTotal, new Padding(0, 0, 7, 0)), 0, 0);
         rates.Controls.Add(CreateRateCard("↑ 送信", TrafficIcons.SendColor, sendRate, sendTotal, new Padding(7, 0, 0, 0)), 1, 0);
-        body.Controls.Add(rates, 0, 4);
-        body.Controls.Add(graph, 0, 5);
+        var tabs = new TabControl { Dock = DockStyle.Fill, Margin = Padding.Empty };
+        var trafficPage = new TabPage("通信量") { BackColor = BackColor };
+        var peersPage = new TabPage("接続先（TCP）") { BackColor = Color.White };
+        var detailPage = new TabPage("UDP 送信先") { BackColor = Color.White };
+        var trafficLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(6), Margin = Padding.Empty };
+        trafficLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 112));
+        trafficLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        trafficLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        trafficLayout.Controls.Add(rates, 0, 0);
+        trafficLayout.Controls.Add(graph, 0, 1);
         var legend = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty, Padding = new Padding(0, 5, 0, 0) };
-        foreach (var (state, text) in new[] { (TrafficState.Receiving, "● 受信"), (TrafficState.Sending, "● 送信"), (TrafficState.Both, "● 送受信"), (TrafficState.Idle, "● 待機"), (TrafficState.Offline, "● 未接続") })
+        foreach (var (state, text) in new[] { (TrafficState.Receiving, "↓ 受信"), (TrafficState.Sending, "↑ 送信"), (TrafficState.Idle, "● 通信なし"), (TrafficState.Offline, "× 未接続") })
             legend.Controls.Add(new Label { Text = text, AutoSize = true, ForeColor = TrafficIcons.ColorFor(state), Margin = new Padding(0, 0, 18, 0) });
-        body.Controls.Add(legend, 0, 6);
+        tips.SetToolTip(legend, "下りは緑、上りは赤。直近の通信速度が大きいほど、それぞれの矢印が強く光ります。");
+        trafficLayout.Controls.Add(legend, 0, 2);
+        trafficPage.Controls.Add(trafficLayout);
+        peersPage.Controls.Add(connections);
+        detailPage.Controls.Add(udpConnections);
+        tabs.TabPages.AddRange([trafficPage, peersPage, detailPage]);
+        body.Controls.Add(tabs, 0, 4);
 
         var options = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
         options.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -113,11 +129,11 @@ internal sealed class MainForm : Form
         hide.Click += (_, _) => HideToTray();
         options.Controls.Add(startup, 0, 0);
         options.Controls.Add(hide, 1, 0);
-        body.Controls.Add(options, 0, 7);
+        body.Controls.Add(options, 0, 5);
         footer.Text = "0.5秒ごとに更新 · × を押しても監視を続けます";
         footer.Dock = DockStyle.Fill;
         footer.TextAlign = ContentAlignment.MiddleLeft;
-        body.Controls.Add(footer, 0, 8);
+        body.Controls.Add(footer, 0, 6);
         Controls.Add(body);
         Controls.Add(menu);
 
@@ -127,7 +143,7 @@ internal sealed class MainForm : Form
         trayMenu.Items.Add("更新を確認…", null, (_, _) => { ShowFromTray(); OpenUpdates(); });
         trayMenu.Items.Add(new ToolStripSeparator());
         trayMenu.Items.Add("終了", null, (_, _) => RequestExit());
-        tray = new NotifyIcon { Icon = icons[TrafficState.Idle], Text = "SaruMon", ContextMenuStrip = trayMenu, Visible = true };
+        tray = new NotifyIcon { Icon = icons.Idle, Text = "SaruMon", ContextMenuStrip = trayMenu, Visible = true };
         tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) ShowFromTray(); };
         adapter.SelectedIndexChanged += (_, _) => SelectAdapter();
         RefreshAdapters();
@@ -186,6 +202,8 @@ internal sealed class MainForm : Form
 
     private void UpdateAdapterDetail()
     {
+        connections.SetInterface((adapter.SelectedItem as AdapterChoice)?.Interface);
+        udpConnections.SetInterface((adapter.SelectedItem as AdapterChoice)?.Interface);
         if (adapter.SelectedItem is not AdapterChoice choice) { adapterDetail.Text = "利用できるインタフェースがありません。"; return; }
         var item = choice.Interface;
         adapterDetail.Text = item == null ? "再接続を待っています。このインタフェースの選択を保持します。" :
@@ -210,8 +228,11 @@ internal sealed class MainForm : Form
         receiveTotal.Text = "選択後の合計  " + FormatBytes(sample?.TotalReceivedBytes ?? 0);
         sendTotal.Text = "選択後の合計  " + FormatBytes(sample?.TotalSentBytes ?? 0);
         graph.Add(sample?.DownloadBytesPerSecond ?? 0, sample?.UploadBytesPerSecond ?? 0);
-        tray.Icon = icons[state];
-        Icon = icons[state];
+        var trafficIcon = icons.GetIcon(sample?.IsAvailable == true,
+            sample?.HasRate == true ? sample.DownloadBytesPerSecond : 0,
+            sample?.HasRate == true ? sample.UploadBytesPerSecond : 0);
+        tray.Icon = trafficIcon;
+        Icon = trafficIcon;
         var name = selected?.Interface?.Name ?? "未選択";
         if (name.Length > 20) name = name[..19] + "…";
         var tooltip = $"SaruMon · {name}\n↓ {receiveRate.Text}  ↑ {sendRate.Text}\n{status}";
@@ -241,14 +262,32 @@ internal sealed class MainForm : Form
     }
 
     private void ShowTrayHelp() => MessageBox.Show(this,
-        "1. タスクバー右端の ∧（隠れているアイコン）を開きます。\n2. SaruMon の丸い上下矢印アイコンを、時計の近くの通知領域へドラッグします。\n\nWindows の「タスクバーの設定 → その他のシステム トレイ アイコン」からも表示を選べます。同名の項目が複数ある場合は、動いているアイコンを直接ドラッグしてください。\n\nスタートアップ登録は、ログイン時にアプリを起動する設定です。アイコンを常に表示する設定とは別です。",
+        "1. タスクバー右端の ∧（隠れているアイコン）を開きます。\n2. SaruMon の上下矢印アイコンを、時計の近くの通知領域へドラッグします。\n\nWindows の「タスクバーの設定 → その他のシステム トレイ アイコン」からも表示を選べます。同名の項目が複数ある場合は、動いているアイコンを直接ドラッグしてください。\n\nスタートアップ登録は、ログイン時にアプリを起動する設定です。アイコンを常に表示する設定とは別です。",
         "SaruMon アイコンを常に表示する", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
     private void ShowHelp() => MessageBox.Show(this,
-        "1. 監視するインタフェースを選択します。\n2. 通知領域に格納すると、アイコンの色で通信を確認できます。\n\n緑: 受信 / 青: 送信 / 紫: 送受信 / 灰: 待機 / 橙: 未接続\n速度の単位はバイト/秒です（1 KiB = 1,024 B）。\n合計は現在のインタフェースを選択してからの通信量です。\n\nアイコンが隠れている場合は、タスクバー右端の ∧ を開き、SaruMon を時計の近くへドラッグしてください。\nアイコンのクリック、または SaruMon の再起動で画面が開きます。\n終了するには、メニューの「終了」を選びます。\n\n更新は「ヘルプ → 更新を確認」から実行できます。",
+        "1. 監視するインタフェースを選択します。\n2. 通知領域に格納すると、矢印の発光で通信を確認できます。\n\n下り（受信）: 緑の下矢印 / 上り（送信）: 赤の上矢印\n直近の通信速度が大きいほど、各矢印が強く光ります。\n通信がない方向は暗い灰色、未接続はオレンジの × です。\n速度の単位はバイト/秒です（1 KiB = 1,024 B）。\n合計は現在のインタフェースを選択してからの通信量です。\n\n「接続先（TCP）」タブで IP・宛先ポート・接続状態を確認できます。\n「逆引き」をオンにすると、DNS で取得したホスト名も表示します。\nホスト名は閲覧サイト名とは限りません。\n\n「UDP 送信先」で「開始」を押すと、管理者承認後に UDP 送信を記録します。\n「ログを保存」で、初回検出時刻・送信イベント数・累積送信量を CSV に保存できます。\n監視開始前の通信は含みません。停止後も保存でき、再開・インタフェース変更で記録をクリアします。\n\nアイコンが隠れている場合は、タスクバー右端の ∧ を開き、SaruMon を時計の近くへドラッグしてください。\nアイコンのクリック、または SaruMon の再起動で画面が開きます。\n終了するには、メニューの「終了」を選びます。\n\n更新は「ヘルプ → 更新を確認」から実行できます。",
         "SaruMon の使い方", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
-    public void RequestExit() { exiting = true; Close(); }
+    public async void RequestExit()
+    {
+        if (shuttingDown) return;
+        shuttingDown = true;
+        timer.Stop();
+        Enabled = false;
+        try { await udpConnections.ShutdownAsync(); }
+        catch (Exception ex)
+        {
+            shuttingDown = false;
+            Enabled = true;
+            timer.Start();
+            MessageBox.Show(this, "UDP 監視の終了を確認できませんでした。\n" + ex.Message,
+                "SaruMon", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+        exiting = true;
+        Close();
+    }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {

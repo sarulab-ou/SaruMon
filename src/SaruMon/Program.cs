@@ -5,6 +5,11 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--udp-helper")
+        {
+            Environment.ExitCode = Udp.UdpMonitorHelper.RunAsync(args).GetAwaiter().GetResult();
+            return;
+        }
         ApplicationConfiguration.Initialize();
         using var instance = new SingleInstance();
         if (!instance.IsPrimary)

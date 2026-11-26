@@ -110,7 +110,7 @@ try {
     $marker = Join-Path $installPath 'SaruMon.install.ini'
     Assert (Test-Path -LiteralPath $exe -PathType Leaf) 'Installed executable is missing.'
     Assert ((Get-FileHash -LiteralPath $exe).Hash -eq (Get-FileHash -LiteralPath (Join-Path $repoRoot 'artifacts/publish/win-x64/SaruMon.exe')).Hash) 'Installed executable differs from the published payload.'
-    foreach ($document in @('development.md', 'releasing.md', 'verification.md')) {
+    foreach ($document in @('development.md', 'releasing.md', 'verification.md', 'third-party-notices.md')) {
         $installedDocument = Join-Path $installPath "docs/$document"
         Assert (Test-Path -LiteralPath $installedDocument -PathType Leaf) "Bundled document is missing: $document"
         Assert ((Get-FileHash -LiteralPath $installedDocument).Hash -eq (Get-FileHash -LiteralPath (Join-Path $repoRoot "docs/$document")).Hash) "Bundled document differs from its source: $document"
@@ -167,7 +167,7 @@ try {
     Assert (Test-Path -LiteralPath $unknownFile) 'Uninstaller deleted an unrelated file.'
     Assert ([IO.File]::ReadAllText($unknownDocFile) -eq 'Preserve this user-authored note.') 'Uninstaller deleted or modified an unrelated documentation file.'
     Assert ([IO.File]::ReadAllText($settingsSentinel) -eq '{"keep":"user settings"}') 'Uninstaller modified user settings.'
-    foreach ($name in @('SaruMon.exe', 'README.md', 'Uninstall.exe', 'SaruMon.install.ini', 'docs/development.md', 'docs/releasing.md', 'docs/verification.md')) {
+    foreach ($name in @('SaruMon.exe', 'README.md', 'Uninstall.exe', 'SaruMon.install.ini', 'docs/development.md', 'docs/releasing.md', 'docs/verification.md', 'docs/third-party-notices.md')) {
         Assert (!(Test-Path -LiteralPath (Join-Path $installPath $name))) "Uninstaller left a known file: $name"
     }
     Assert ($null -eq (Read-Value $runKey $profile)) 'Own startup command was not removed.'
