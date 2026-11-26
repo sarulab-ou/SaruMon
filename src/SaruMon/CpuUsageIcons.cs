@@ -4,6 +4,7 @@ internal sealed class CpuUsageIcons : IDisposable
 {
     private static readonly Color BarColor = Color.FromArgb(87, 192, 255);
     private static readonly Color TrackColor = Color.FromArgb(150, 150, 160);
+    private static readonly Color FrameColor = Color.FromArgb(181, 181, 186);
 
     private readonly int size;
     private readonly int borderWidth;
@@ -35,22 +36,19 @@ internal sealed class CpuUsageIcons : IDisposable
     {
         using var bitmap = new Bitmap(size, size);
         using var graphics = Graphics.FromImage(bitmap);
-        graphics.Clear(Color.Transparent);
+        graphics.Clear(FrameColor);
 
-        var top = Scale(3);
-        var height = size - 2 * top;
-        using var frame = new SolidBrush(Color.FromArgb(76, 94, 113));
-        graphics.FillRectangle(frame, 0, top - borderWidth, size, height + 2 * borderWidth);
         using var track = new SolidBrush(TrackColor);
-        graphics.FillRectangle(track, borderWidth, top, trackWidth, height);
+        graphics.FillRectangle(track, borderWidth, borderWidth, trackWidth, trackWidth);
         if (width < 0)
         {
-            graphics.FillRectangle(frame, Scale(6), (size - borderWidth) / 2, Scale(10) - Scale(6), borderWidth);
+            using var marker = new SolidBrush(Color.FromArgb(76, 94, 113));
+            graphics.FillRectangle(marker, Scale(6), (size - borderWidth) / 2, Scale(10) - Scale(6), borderWidth);
         }
         else if (width > 0)
         {
             using var bar = new SolidBrush(BarColor);
-            graphics.FillRectangle(bar, borderWidth, top, width, height);
+            graphics.FillRectangle(bar, borderWidth, borderWidth, width, trackWidth);
         }
 
         return TrayIconImage.FromBitmap(bitmap);

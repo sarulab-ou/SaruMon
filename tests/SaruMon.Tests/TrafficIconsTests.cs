@@ -97,7 +97,7 @@ internal static class TrafficIconsTests
 
     private static void CpuBarFillsByPercentage()
     {
-        foreach (var (size, border, top) in new[] { (16, 1, 3), (20, 1, 4), (24, 2, 5), (32, 2, 6) })
+        foreach (var (size, border) in new[] { (16, 1), (20, 1), (24, 2), (32, 2) })
         {
             using var icons = new CpuUsageIcons(size);
             using var unavailable = icons.GetIcon(null).ToBitmap();
@@ -107,15 +107,19 @@ internal static class TrafficIconsTests
             var center = size / 2;
             var blue = Color.FromArgb(87, 192, 255).ToArgb();
             var track = Color.FromArgb(150, 150, 160).ToArgb();
+            var frame = Color.FromArgb(181, 181, 186).ToArgb();
             var markerRow = (size - border) / 2;
             Assert(idle.GetPixel(center, markerRow) != unavailable.GetPixel(center, markerRow),
                 "Idle and unavailable states must be visually distinguishable.");
-            Assert(half.GetPixel(center, 0).A == 0 && half.GetPixel(center, size - 1).A == 0,
-                "The horizontal meter must have transparent space above and below it.");
-            for (var y = top; y < size - top; y++)
+            for (var y = 0; y < size; y++)
             {
-                for (var x = border; x < size - border; x++)
+                for (var x = 0; x < size; x++)
                 {
+                    if (x < border || x >= size - border || y < border || y >= size - border)
+                    {
+                        Assert(half.GetPixel(x, y).ToArgb() == frame, "The light gray frame must enclose the square meter.");
+                        continue;
+                    }
                     Assert(idle.GetPixel(x, y).ToArgb() == track, "The empty CPU meter must have a plain track.");
                     Assert(half.GetPixel(x, y).ToArgb() == (x < center ? blue : track),
                         "Half CPU load must fill the left half of the full-height track.");
