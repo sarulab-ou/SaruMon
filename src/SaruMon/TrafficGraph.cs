@@ -36,7 +36,7 @@ internal sealed class TrafficGraph : Control
             var y = area.Top + area.Height * i / 3;
             g.DrawLine(grid, area.Left, y, area.Right, y);
         }
-        TextRenderer.DrawText(g, "通信速度  /  " + MainForm.FormatBytes(ceiling) + "/s", Font, new Point(10, 5), ForeColor);
+        TextRenderer.DrawText(g, "通信速度  /  " + MainForm.FormatBitRate(ceiling), Font, new Point(10, 5), ForeColor);
         TextRenderer.DrawText(g, "60秒前", Font, new Point(10, Height - 23), ForeColor);
         TextRenderer.DrawText(g, "現在", Font, new Rectangle(0, Height - 23, Width - 10, 23), ForeColor, TextFormatFlags.Right);
         var data = samples.ToArray();

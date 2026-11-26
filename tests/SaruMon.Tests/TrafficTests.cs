@@ -26,7 +26,19 @@ internal static class TrafficTests
         TcpActivityUsesBothFamiliesAndResends();
         TcpActivityRebaselinesAfterResetAndMissingRead();
         TcpOverviewUsesCaptureIntervalsAndRevisions();
-        return 19;
+        BitRateUsesDecimalPrefixes();
+        return 20;
+    }
+
+    private static void BitRateUsesDecimalPrefixes()
+    {
+        Expect(MainForm.FormatBitRate(0) == "0 bps", "Idle traffic must display zero bits per second.");
+        Expect(MainForm.FormatBitRate(1) == "8 bps", "One byte per second must display as eight bits per second.");
+        Expect(MainForm.FormatBitRate(125) == "1 kbps", "A kilobit per second must be 1000 bits per second.");
+        Expect(MainForm.FormatBitRate(200) == $"{1.6:0.#} kbps", "Rates must retain one decimal place when needed.");
+        Expect(MainForm.FormatBitRate(125_000) == "1 Mbps", "Megabits must use decimal prefixes.");
+        Expect(MainForm.FormatBitRate(125_000_000) == "1 Gbps", "Gigabits must use decimal prefixes.");
+        Expect(MainForm.FormatBitRate(125_000_000_000) == "1 Tbps", "Terabits must use decimal prefixes.");
     }
 
     private static TrafficSample Sample(TrafficSampler sampler, double time, long received, long sent,

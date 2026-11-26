@@ -108,7 +108,7 @@ internal static class TrafficIconsTests
         [
             ("Idle", true, 0, 0),
             ("Receive · 1 pixel", true, 1024, 0),
-            ("Send · 128 KiB/s", true, 0, 128 * 1024),
+            ($"Send · {MainForm.FormatBitRate(128 * 1024)}", true, 0, 128 * 1024),
             ("Receive + send", true, 2 * 1024 * 1024, 64 * 1024),
             ("Offline", false, 0, 0)
         ];

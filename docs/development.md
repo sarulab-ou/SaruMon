@@ -55,8 +55,8 @@ dotnet run --project tests/SaruMon.Tests/SaruMon.Tests.csproj --configuration Re
 | `artifacts/publish/win-x64/SaruMon.exe` | 配布用の単一 EXE |
 | `artifacts/SaruMon-win-x64.zip` | ポータブル版・アプリ内更新用 |
 | `artifacts/SaruMon-win-x64.zip.sha256` | アプリ内更新で照合するハッシュ |
-| `artifacts/SaruMon-0.1.11-Setup-x64.exe` | v0.1.11 インストーラー |
-| `artifacts/SaruMon-0.1.11-SHA256SUMS.txt` | v0.1.11 インストーラーの SHA-256 |
+| `artifacts/SaruMon-0.1.12-Setup-x64.exe` | v0.1.12 インストーラー |
+| `artifacts/SaruMon-0.1.12-SHA256SUMS.txt` | v0.1.12 インストーラーの SHA-256 |
 
 ビルド成果物は Git に追加しません。公開手順は [releasing.md](releasing.md) を参照してください。
 
@@ -67,14 +67,14 @@ dotnet run --project tests/SaruMon.Tests/SaruMon.Tests.csproj --configuration Re
 「Windows ログイン時に起動」コンポーネントは既定で選択され、現在のユーザーのログイン時にインストール先の `SaruMon.exe --tray` を実行するよう登録します。対話形式ではチェックを外せます。サイレントインストールで登録を無効にする場合は `/NoStartup` を指定します。
 
 ```powershell
-Start-Process -FilePath '.\artifacts\SaruMon-0.1.11-Setup-x64.exe' -ArgumentList '/S', '/NoStartup' -WindowStyle Hidden -Wait
+Start-Process -FilePath '.\artifacts\SaruMon-0.1.12-Setup-x64.exe' -ArgumentList '/S', '/NoStartup' -WindowStyle Hidden -Wait
 ```
 
 ZIP 版はアプリ内で自動起動を有効にします。インストーラーの自動起動登録は、Windows の通知領域でアイコンを常時表示する設定を変更しません。表示位置は起動後に利用者が調整します。
 
 ## 通信アイコン
 
-通知領域では白地を左右に分け、左の緑は受信量を上から下へ、右の赤は送信量を下から上へ伸びる棒で表します。1 秒ごとに方向別の速度を対数目盛りで高さに変換します。通信がある場合は 1 KiB/s 以下で 1 ピクセル、16 MiB/s 以上で最大の高さです。対象の通信がない方向の棒は空欄になり、未接続はオレンジの × にします。
+通知領域では白地を左右に分け、左の緑は受信量を上から下へ、右の赤は送信量を下から上へ伸びる棒で表します。1 秒ごとに方向別の速度を対数目盛りで高さに変換します。約 8.2 kbps 以下の通信は 1 ピクセル、約 134.2 Mbps 以上は最大の高さです。対象の通信がない方向の棒は空欄になり、未接続はオレンジの × にします。
 
 起動時に Windows の小アイコン寸法を取得し、その寸法で棒を 1 ピクセル刻みで描画します。最近使った最大 32 種類のアイコンを再利用し、同じ高さの組み合わせでは Windows 側への再設定を省きます。`--icon-preview <出力先.png>` をテスト実行プログラムに渡すと、16 / 20 / 24 / 32 ピクセルで全状態を確認できます。
 

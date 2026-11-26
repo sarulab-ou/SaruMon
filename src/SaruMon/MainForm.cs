@@ -8,6 +8,7 @@ namespace SaruMon;
 
 internal sealed class MainForm : Form
 {
+    private static readonly string[] BitRateUnits = ["bps", "kbps", "Mbps", "Gbps", "Tbps"];
     private readonly AppSettings settings = AppSettings.Load();
     private readonly TrafficSampler sampler = new();
     private readonly TcpIndicatorSampler tcpIndicatorSampler = new();
@@ -277,8 +278,8 @@ internal sealed class MainForm : Form
         }
         var down = tcpOnlyMode ? traffic?.DownloadBytesPerSecond : latestSample?.HasRate == true ? latestSample.DownloadBytesPerSecond : null;
         var up = tcpOnlyMode ? traffic?.UploadBytesPerSecond : latestSample?.HasRate == true ? latestSample.UploadBytesPerSecond : null;
-        receiveRate.Text = down.HasValue ? FormatBytes(down.Value) + "/s" : "—";
-        sendRate.Text = up.HasValue ? FormatBytes(up.Value) + "/s" : "—";
+        receiveRate.Text = down.HasValue ? FormatBitRate(down.Value) : "—";
+        sendRate.Text = up.HasValue ? FormatBitRate(up.Value) : "—";
         receiveTotal.Text = tcpOnlyMode ? "TCP 観測後の合計  " + (traffic is null ? "—" : FormatBytes(traffic.ReceivedBytes))
             : "選択後の合計  " + FormatBytes(latestSample?.TotalReceivedBytes ?? 0);
         sendTotal.Text = tcpOnlyMode ? "TCP 観測後の合計  " + (traffic is null ? "—" : FormatBytes(traffic.SentBytes))
@@ -397,7 +398,7 @@ internal sealed class MainForm : Form
         var name = (adapter.SelectedItem as AdapterChoice)?.Interface?.Name ?? "未選択";
         if (name.Length > 10) name = name[..9] + "…";
         var scope = tcpOnlyMode ? "TCP" : "全体";
-        var tooltip = $"SaruMon · {name}\n棒: {mode} · {status}\n{scope} ↓ {receiveRate.Text} ↑ {sendRate.Text}";
+        var tooltip = $"SaruMon · {name}\n{scope} ↓ {receiveRate.Text} ↑ {sendRate.Text}\n棒: {mode} · {status}";
         if (tooltip.Length > 63) tooltip = tooltip[..63];
         if (tray.Text != tooltip) tray.Text = tooltip;
     }
@@ -429,7 +430,7 @@ internal sealed class MainForm : Form
         "SaruMon アイコンを常に表示する", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
     private void ShowHelp() => MessageBox.Show(this,
-        "1. 監視するインタフェースを選択します。\n2. 通知領域に格納すると、白地の棒グラフで通信量を確認できます。\n\n左の緑は受信で、上から下へ伸びます。右の赤は送信で、下から上へ伸びます。\n1秒ごとに、通信量に応じて1ピクセル刻みで伸びます。1 KiB/s以下の通信は1ピクセル、16 MiB/s以上は最大の高さです。\n通信がない方向の棒は消え、未接続はオレンジの × です。\n「ユニキャスト通信だけで棒を表示」をオンにすると、ユニキャスト通信があった方向だけ棒を表示します。高さはその方向の全通信量です。\n管理者権限は不要で、TCP・UDPとLAN内の個別通信を含みます。設定は次回起動時も引き継ぎます。\n「TCP通信の目安で棒を表示」では、選択した回線とPC全体のTCPで同じ区間に通信が増えた方向を表示します。高さはその方向の全通信量です。\nPC内や別回線のTCPが選択回線のUDPと重なると点灯する場合があります。管理者権限は不要です。\n「TCP通信だけを表示（管理者権限）」をオンにすると、選択したインタフェースのローカルIPに対応するTCPの棒・速度・合計・グラフを表示します。\nPC内で完結する通信は除きます。TCP観測は起動時にオフです。\n通常時と目安モードの速度・合計・グラフはインタフェース全体の値です。\n速度の単位はバイト/秒です（1 KiB = 1,024 B）。\n合計は現在のインタフェースを選択してからの通信量です。\n\n「接続先（TCP）」タブで IP・宛先ポート・接続状態を確認できます。\n「相手ごとの通信量」で監視を開始すると、相手 IP ごとの上り・下り合計を記録します。\n「ログを保存」で、相手 IP・名前・上り合計・下り合計・接続回数・開始時刻・最終時刻を CSV に保存できます。\n「リセット」で相手別ログを消去します。監視中は新しい集計を続けます。\n接続回数は監視中に観測した分です。監視前からの接続は回数に含めません。\n開始・最終時刻は、その相手を最初・最後に観測した時刻です。\n「逆引き」をオンにすると、DNS で取得したホスト名も表示します。\nホスト名は閲覧サイト名とは限りません。\n\n「UDP 送信先」で「開始」を押すと、管理者承認後に UDP 送信を記録します。\n「保存」で、開始時刻・最終時刻・送信イベント数・累積送信量を CSV に保存できます。\n「リセット」で UDP 送信先ログを消去します。監視中はリセット後の送信から集計を続けます。\nUDP の開始・最終時刻は、最初・最後に送信を観測した時刻です。\n監視開始前の通信は含みません。停止後も保存でき、再開・インタフェース変更で記録をクリアします。\n\nアイコンが隠れている場合は、タスクバー右端の ∧ を開き、SaruMon を時計の近くへドラッグしてください。\nアイコンのクリック、または SaruMon の再起動で画面が開きます。\n終了するには、メニューの「終了」を選びます。\n\n更新は「ヘルプ → 更新を確認」から実行できます。",
+        "1. 監視するインタフェースを選択します。\n2. 通知領域に格納すると、白地の棒グラフで通信量を確認できます。\n\n左の緑は受信で、上から下へ伸びます。右の赤は送信で、下から上へ伸びます。\n1秒ごとに、通信量に応じて1ピクセル刻みで伸びます。約8.2 kbps以下の通信は1ピクセル、約134.2 Mbps以上は最大の高さです。\n通信がない方向の棒は消え、未接続はオレンジの × です。\n「ユニキャスト通信だけで棒を表示」をオンにすると、ユニキャスト通信があった方向だけ棒を表示します。高さはその方向の全通信量です。\n管理者権限は不要で、TCP・UDPとLAN内の個別通信を含みます。設定は次回起動時も引き継ぎます。\n「TCP通信の目安で棒を表示」では、選択した回線とPC全体のTCPで同じ区間に通信が増えた方向を表示します。高さはその方向の全通信量です。\nPC内や別回線のTCPが選択回線のUDPと重なると点灯する場合があります。管理者権限は不要です。\n「TCP通信だけを表示（管理者権限）」をオンにすると、選択したインタフェースのローカルIPに対応するTCPの棒・速度・合計・グラフを表示します。\nPC内で完結する通信は除きます。TCP観測は起動時にオフです。\n通常時と目安モードの速度・合計・グラフはインタフェース全体の値です。\n速度はビット毎秒（bps、kbps、Mbpsなど）で表示します。合計の単位はバイトです。\n合計は現在のインタフェースを選択してからの通信量です。\n\n「接続先（TCP）」タブで IP・宛先ポート・接続状態を確認できます。\n「相手ごとの通信量」で監視を開始すると、相手 IP ごとの上り・下り合計を記録します。\n「ログを保存」で、相手 IP・名前・上り合計・下り合計・接続回数・開始時刻・最終時刻を CSV に保存できます。\n「リセット」で相手別ログを消去します。監視中は新しい集計を続けます。\n接続回数は監視中に観測した分です。監視前からの接続は回数に含めません。\n開始・最終時刻は、その相手を最初・最後に観測した時刻です。\n「逆引き」をオンにすると、DNS で取得したホスト名も表示します。\nホスト名は閲覧サイト名とは限りません。\n\n「UDP 送信先」で「開始」を押すと、管理者承認後に UDP 送信を記録します。\n「保存」で、開始時刻・最終時刻・送信イベント数・累積送信量を CSV に保存できます。\n「リセット」で UDP 送信先ログを消去します。監視中はリセット後の送信から集計を続けます。\nUDP の開始・最終時刻は、最初・最後に送信を観測した時刻です。\n監視開始前の通信は含みません。停止後も保存でき、再開・インタフェース変更で記録をクリアします。\n\nアイコンが隠れている場合は、タスクバー右端の ∧ を開き、SaruMon を時計の近くへドラッグしてください。\nアイコンのクリック、または SaruMon の再起動で画面が開きます。\n終了するには、メニューの「終了」を選びます。\n\n更新は「ヘルプ → 更新を確認」から実行できます。",
         "SaruMon の使い方", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
     public async void RequestExit()
@@ -478,6 +479,18 @@ internal sealed class MainForm : Form
             icons.Dispose();
         }
         base.Dispose(disposing);
+    }
+
+    internal static string FormatBitRate(double bytesPerSecond)
+    {
+        var bits = bytesPerSecond * 8;
+        var unit = 0;
+        while (bits >= 1000 && unit < BitRateUnits.Length - 1)
+        {
+            bits /= 1000;
+            unit++;
+        }
+        return bits.ToString(unit == 0 ? "0" : "0.#", System.Globalization.CultureInfo.CurrentCulture) + " " + BitRateUnits[unit];
     }
 
     internal static string FormatBytes(double bytes)
