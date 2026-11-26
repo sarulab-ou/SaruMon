@@ -55,8 +55,8 @@ dotnet run --project tests/SaruMon.Tests/SaruMon.Tests.csproj --configuration Re
 | `artifacts/publish/win-x64/SaruMon.exe` | 配布用の単一 EXE |
 | `artifacts/SaruMon-win-x64.zip` | ポータブル版・アプリ内更新用 |
 | `artifacts/SaruMon-win-x64.zip.sha256` | アプリ内更新で照合するハッシュ |
-| `artifacts/SaruMon-0.1.6-Setup-x64.exe` | v0.1.6 インストーラー |
-| `artifacts/SaruMon-0.1.6-SHA256SUMS.txt` | v0.1.6 インストーラーの SHA-256 |
+| `artifacts/SaruMon-0.1.7-Setup-x64.exe` | v0.1.7 インストーラー |
+| `artifacts/SaruMon-0.1.7-SHA256SUMS.txt` | v0.1.7 インストーラーの SHA-256 |
 
 ビルド成果物は Git に追加しません。公開手順は [releasing.md](releasing.md) を参照してください。
 
@@ -67,7 +67,7 @@ dotnet run --project tests/SaruMon.Tests/SaruMon.Tests.csproj --configuration Re
 「Windows ログイン時に起動」コンポーネントは既定で選択され、現在のユーザーのログイン時にインストール先の `SaruMon.exe --tray` を実行するよう登録します。対話形式ではチェックを外せます。サイレントインストールで登録を無効にする場合は `/NoStartup` を指定します。
 
 ```powershell
-Start-Process -FilePath '.\artifacts\SaruMon-0.1.6-Setup-x64.exe' -ArgumentList '/S', '/NoStartup' -WindowStyle Hidden -Wait
+Start-Process -FilePath '.\artifacts\SaruMon-0.1.7-Setup-x64.exe' -ArgumentList '/S', '/NoStartup' -WindowStyle Hidden -Wait
 ```
 
 ZIP 版はアプリ内で自動起動を有効にします。インストーラーの自動起動登録は、Windows の通知領域でアイコンを常時表示する設定を変更しません。表示位置は起動後に利用者が調整します。
@@ -75,6 +75,10 @@ ZIP 版はアプリ内で自動起動を有効にします。インストーラ�
 ## 通信アイコン
 
 通知領域では白地を使い、受信を緑の下向き矢印、送信を赤の上向き矢印で表します。矢印は太く、色と濃さを固定します。0.5 秒ごとの更新で、直前の計測区間に表示対象の通信があった方向だけ表示します。両方向とも対象の通信がない場合は白地だけ、未接続はオレンジの × にします。
+
+起動時に Windows の小アイコン寸法を取得し、その寸法で矢印の輪郭を滑らかに描画します。5 種類のアイコンは起動時に生成して使い回します。`--icon-preview <出力先.png>` をテスト実行プログラムに渡すと、16 / 20 / 24 / 32 ピクセルで全状態を確認できます。
+
+「TCP通信の目安で矢印を表示」は既定でオフです。オンで回線を利用できる間は、既存タイマーで OS の TCP 統計を利用可能なアドレスファミリーごとに取得します。`TcpIndicatorSampler` が IPv4 / IPv6 の送受信セグメント数と再送数の差分を計算し、同じ方向のインタフェース側の増加と組み合わせて点灯を判定します。切断・設定変更・統計の欠測の後は基準値を取り直します。双方のカウンターが同時に増えることを使った推定なので、TCP が実際に通ったインタフェースを特定するものではありません。
 
 `AppSettings.UnicastOnlyIndicator` は既定で `false` です。ウィンドウ下部のチェックボックスと通知領域の右クリックメニューで同期して切り替えます。オフでは送受信バイト数の差分、オンではユニキャスト送受信パケット数の差分が正かどうかを方向ごとに判定します。設定の切り替えは表示対象だけを変え、速度・合計・グラフの値や集計開始点は変えません。ユニキャストのカウンターを取得できない場合は判定できないことを表示し、全体の通信量で代用しません。
 

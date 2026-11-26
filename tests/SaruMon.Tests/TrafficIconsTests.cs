@@ -17,22 +17,30 @@ internal static class TrafficIconsTests
 
     private static void DirectionColorsAndFixedBackground()
     {
-        using var icons = new TrafficIcons();
-        using var idle = icons.Idle.ToBitmap();
-        using var receive = icons.GetIcon(true, 1, 0).ToBitmap();
-        using var send = icons.GetIcon(true, 0, 1).ToBitmap();
-        using var offline = icons.GetIcon(false, 0, 0).ToBitmap();
-        var green = receive.GetPixel(8, 8);
-        var red = send.GetPixel(24, 24);
-        Assert(green.G > green.R && green.G > green.B, "Receive arrow must be green.");
-        Assert(red.R > red.G && red.R > red.B, "Send arrow must be red.");
-        Assert(idle.GetPixel(8, 8).ToArgb() == Color.White.ToArgb() && idle.GetPixel(24, 24).ToArgb() == Color.White.ToArgb(), "Idle arrows must be absent on a white background.");
-        Assert(receive.GetPixel(24, 24).ToArgb() == Color.White.ToArgb(), "Receive traffic must not display the send arrow.");
-        Assert(send.GetPixel(8, 8).ToArgb() == Color.White.ToArgb(), "Send traffic must not display the receive arrow.");
-        foreach (var bitmap in new[] { receive, send, offline })
-            Assert(bitmap.GetPixel(16, 3).ToArgb() == Color.White.ToArgb(), "Background must remain white across traffic states.");
-        var orange = offline.GetPixel(16, 16);
-        Assert(orange.R > orange.G && orange.G > orange.B, "Offline cross must remain orange.");
+        foreach (var size in new[] { 16, 20, 24, 32 })
+        {
+            using var icons = new TrafficIcons(size);
+            using var idle = icons.Idle.ToBitmap();
+            using var receive = icons.GetIcon(true, 1, 0).ToBitmap();
+            using var send = icons.GetIcon(true, 0, 1).ToBitmap();
+            using var offline = icons.GetIcon(false, 0, 0).ToBitmap();
+            var left = size / 4;
+            var right = size * 3 / 4;
+            var green = receive.GetPixel(left, left);
+            var red = send.GetPixel(right, right);
+            Assert(green.G > green.R && green.G > green.B, "Receive arrow must be green.");
+            Assert(red.R > red.G && red.R > red.B, "Send arrow must be red.");
+            Assert(idle.GetPixel(left, left).ToArgb() == Color.White.ToArgb() && idle.GetPixel(right, right).ToArgb() == Color.White.ToArgb(), "Idle arrows must be absent on a white background.");
+            Assert(receive.GetPixel(right, right).ToArgb() == Color.White.ToArgb(), "Receive traffic must not display the send arrow.");
+            Assert(send.GetPixel(left, left).ToArgb() == Color.White.ToArgb(), "Send traffic must not display the receive arrow.");
+            foreach (var bitmap in new[] { idle, receive, send, offline })
+            {
+                Assert(bitmap.Size == new Size(size, size), "An icon must be rendered at the requested size.");
+                Assert(bitmap.GetPixel(size / 2, 1).ToArgb() == Color.White.ToArgb(), "Background must remain white across traffic states.");
+            }
+            var orange = offline.GetPixel(size / 2, size / 2);
+            Assert(orange.R > orange.G && orange.G > orange.B, "Offline cross must remain orange.");
+        }
     }
 
     private static void AnyTrafficHasSameFixedColor()
@@ -78,14 +86,14 @@ internal static class TrafficIconsTests
 
     internal static void WritePreview(string outputPath)
     {
-        using var icons = new TrafficIcons();
-        using var bitmap = new Bitmap(650, 380);
+        using var bitmap = new Bitmap(730, 440);
         using var graphics = Graphics.FromImage(bitmap);
         graphics.Clear(Color.FromArgb(245, 247, 250));
         using var font = new Font("Segoe UI", 9);
         using var titleFont = new Font("Segoe UI", 12, FontStyle.Bold);
         using var ink = new SolidBrush(Color.FromArgb(35, 45, 60));
-        graphics.DrawString("SaruMon: white background, fixed colors (16 / 32 / 64 px)", titleFont, ink, 20, 14);
+        using var dark = new SolidBrush(Color.FromArgb(32, 34, 39));
+        graphics.DrawString("SaruMon notification icons", titleFont, ink, 20, 14);
         (string Label, bool Available, double Receive, double Send)[] samples =
         [
             ("Idle", true, 0, 0),
@@ -95,20 +103,25 @@ internal static class TrafficIconsTests
             ("Offline", false, 0, 0)
         ];
         for (var index = 0; index < samples.Length; index++)
+            graphics.DrawString(samples[index].Label, font, ink, 116 + index * 120, 50);
+
+        graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
+        graphics.PixelOffsetMode = PixelOffsetMode.Half;
+        var y = 80;
+        foreach (var size in new[] { 16, 20, 24, 32 })
         {
-            var sample = samples[index];
-            var x = 25 + index * 126;
-            graphics.DrawString(sample.Label, font, ink, x, 50);
-            using var source = icons.GetIcon(sample.Available, sample.Receive, sample.Send).ToBitmap();
-            graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
-            graphics.PixelOffsetMode = PixelOffsetMode.Half;
-            graphics.DrawImage(source, new Rectangle(x + 24, 80, 16, 16));
-            graphics.DrawImage(source, new Rectangle(x + 16, 112, 32, 32));
-            graphics.DrawImage(source, new Rectangle(x, 160, 64, 64));
-            using var dark = new SolidBrush(Color.FromArgb(32, 34, 39));
-            graphics.FillRectangle(dark, x - 4, 245, 76, 105);
-            graphics.DrawImage(source, new Rectangle(x + 24, 257, 16, 16));
-            graphics.DrawImage(source, new Rectangle(x + 16, 293, 32, 32));
+            graphics.DrawString($"{size} px / 2×", font, ink, 20, y + 16);
+            using var icons = new TrafficIcons(size);
+            for (var index = 0; index < samples.Length; index++)
+            {
+                var sample = samples[index];
+                var x = 108 + index * 120;
+                using var source = icons.GetIcon(sample.Available, sample.Receive, sample.Send).ToBitmap();
+                graphics.DrawImageUnscaled(source, x, y + 4);
+                graphics.FillRectangle(dark, x + 35, y, size * 2 + 8, size * 2 + 8);
+                graphics.DrawImage(source, new Rectangle(x + 39, y + 4, size * 2, size * 2));
+            }
+            y += 85;
         }
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
         bitmap.Save(outputPath, ImageFormat.Png);

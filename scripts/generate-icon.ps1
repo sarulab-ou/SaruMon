@@ -9,32 +9,30 @@ $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $assetDirectory = Join-Path $root 'assets'
 $null = New-Item -ItemType Directory -Path $assetDirectory -Force
 $frames = [Collections.Generic.List[object]]::new()
-foreach ($size in @(16, 24, 32, 48, 64, 128, 256)) {
+foreach ($size in @(16, 20, 24, 32, 48, 64, 128, 256)) {
     $bitmap = [Drawing.Bitmap]::new($size, $size, [Drawing.Imaging.PixelFormat]::Format32bppArgb)
     $graphics = [Drawing.Graphics]::FromImage($bitmap)
-    # Match TrafficIcons: opaque white, wide arrows, and fixed colors without glow.
-    $border = [Drawing.Pen]::new([Drawing.Color]::FromArgb(150, 150, 150), 1)
-    $receive = [Drawing.SolidBrush]::new([Drawing.Color]::FromArgb(0, 140, 62))
-    $send = [Drawing.SolidBrush]::new([Drawing.Color]::FromArgb(210, 24, 35))
-    $receivePath = [Drawing.Drawing2D.GraphicsPath]::new()
-    $sendPath = [Drawing.Drawing2D.GraphicsPath]::new()
+    # Match the active arrows in TrafficIcons, drawn on the 16-pixel grid.
+    $border = [Drawing.Pen]::new([Drawing.Color]::FromArgb(169, 179, 190), 1)
+    $receive = [Drawing.Pen]::new([Drawing.Color]::FromArgb(0, 140, 62), 2)
+    $send = [Drawing.Pen]::new([Drawing.Color]::FromArgb(210, 24, 35), 2)
     $stream = [IO.MemoryStream]::new()
     $frameWriter = [IO.BinaryWriter]::new($stream)
     try {
         $graphics.Clear([Drawing.Color]::White)
-        $graphics.SmoothingMode = [Drawing.Drawing2D.SmoothingMode]::None
-        $graphics.ScaleTransform($size / 32.0, $size / 32.0)
-        $graphics.DrawRectangle($border, [single]0.5, [single]0.5, [single]31, [single]31)
-        $receivePath.AddPolygon([Drawing.PointF[]]@(
-            [Drawing.PointF]::new(4, 4), [Drawing.PointF]::new(12, 4),
-            [Drawing.PointF]::new(12, 18), [Drawing.PointF]::new(14, 18),
-            [Drawing.PointF]::new(8, 28), [Drawing.PointF]::new(2, 18), [Drawing.PointF]::new(4, 18)))
-        $sendPath.AddPolygon([Drawing.PointF[]]@(
-            [Drawing.PointF]::new(20, 28), [Drawing.PointF]::new(28, 28),
-            [Drawing.PointF]::new(28, 14), [Drawing.PointF]::new(30, 14),
-            [Drawing.PointF]::new(24, 4), [Drawing.PointF]::new(18, 14), [Drawing.PointF]::new(20, 14)))
-        $graphics.FillPath($receive, $receivePath)
-        $graphics.FillPath($send, $sendPath)
+        $graphics.DrawRectangle($border, 0, 0, ($size - 1), ($size - 1))
+        $graphics.SmoothingMode = [Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $graphics.ScaleTransform($size / 16.0, $size / 16.0)
+        foreach ($pen in @($receive, $send)) {
+            $pen.StartCap = $pen.EndCap = [Drawing.Drawing2D.LineCap]::Round
+            $pen.LineJoin = [Drawing.Drawing2D.LineJoin]::Round
+        }
+        $graphics.DrawLine($receive, [single]4.5, [single]3.5, [single]4.5, [single]12)
+        $graphics.DrawLines($receive, [Drawing.PointF[]]@(
+            [Drawing.PointF]::new(2.5, 9), [Drawing.PointF]::new(4.5, 12), [Drawing.PointF]::new(6.5, 9)))
+        $graphics.DrawLine($send, [single]11.5, [single]12.5, [single]11.5, [single]4)
+        $graphics.DrawLines($send, [Drawing.PointF[]]@(
+            [Drawing.PointF]::new(9.5, 7), [Drawing.PointF]::new(11.5, 4), [Drawing.PointF]::new(13.5, 7)))
         $graphics.Flush()
         $locked = $bitmap.LockBits([Drawing.Rectangle]::new(0, 0, $size, $size), [Drawing.Imaging.ImageLockMode]::ReadOnly, [Drawing.Imaging.PixelFormat]::Format32bppArgb)
         try {
@@ -62,7 +60,6 @@ foreach ($size in @(16, 24, 32, 48, 64, 128, 256)) {
         $frames.Add(@{ Size = $size; Image = $stream.ToArray() })
     } finally {
         $frameWriter.Dispose(); $stream.Dispose()
-        $sendPath.Dispose(); $receivePath.Dispose()
         $send.Dispose(); $receive.Dispose()
         $border.Dispose(); $graphics.Dispose(); $bitmap.Dispose()
     }

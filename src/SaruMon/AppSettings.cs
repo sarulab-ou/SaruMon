@@ -8,6 +8,7 @@ internal sealed class AppSettings
     private static readonly string SettingsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SaruMon");
     public string? InterfaceId { get; set; }
     public bool UnicastOnlyIndicator { get; set; }
+    public bool TcpActivityIndicator { get; set; }
 
     public static AppSettings Load()
     {

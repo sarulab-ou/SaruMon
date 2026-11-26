@@ -22,7 +22,9 @@ internal static class TrafficTests
         UnicastInterfaceAndExplicitReset();
         UnicastByteResetAndInvalidInterval();
         LargeUnicastCountersDoNotOverflow();
-        return 16;
+        TcpActivityUsesBothFamiliesAndResends();
+        TcpActivityRebaselinesAfterResetAndMissingRead();
+        return 18;
     }
 
     private static TrafficSample Sample(TrafficSampler sampler, double time, long received, long sent,
@@ -273,6 +275,38 @@ internal static class TrafficTests
         Expect(reset.ReceivedUnicastDelta == 0 && reset.SentUnicastDelta == 0, "Counter wrap must rebaseline without a negative spike.");
         var next = Sample(sampler, 1.5, 30, 30, unicastReceived: 1, unicastSent: 1);
         Expect(next.ReceivedUnicastDelta == 1 && next.SentUnicastDelta == 1, "Packet sampling must resume after wrap.");
+    }
+
+    private static void TcpActivityUsesBothFamiliesAndResends()
+    {
+        var sampler = new TcpIndicatorSampler();
+        var first = sampler.Sample(new(10, 20, 3), new(30, 40, 4), hasInterfaceInterval: true);
+        Expect(first == new TcpActivity(true, false, false), "TCP counters need an initial baseline even when the interface is active.");
+        var receive = sampler.Sample(new(11, 20, 3), new(30, 40, 4), hasInterfaceInterval: true);
+        Expect(receive == new TcpActivity(true, true, false), "IPv4 TCP receive activity should affect receive only.");
+        var resend = sampler.Sample(new(11, 20, 3), new(30, 40, 5), hasInterfaceInterval: true);
+        Expect(resend == new TcpActivity(true, false, true), "An IPv6 retransmission should count as send activity.");
+        var both = sampler.Sample(new(11, 21, 3), new(31, 40, 5), hasInterfaceInterval: true);
+        Expect(both == new TcpActivity(true, true, true), "TCP send and receive may be active in different address families.");
+    }
+
+    private static void TcpActivityRebaselinesAfterResetAndMissingRead()
+    {
+        var sampler = new TcpIndicatorSampler();
+        sampler.Sample(new(10, 20, 3), new(30, 40, 4), hasInterfaceInterval: false);
+        var reset = sampler.Sample(new(0, 0, 0), new(31, 40, 4), hasInterfaceInterval: true);
+        Expect(reset == new TcpActivity(true, true, false), "A counter reset must preserve activity from the other address family.");
+        var missing = sampler.Sample(null, null, hasInterfaceInterval: true);
+        Expect(missing == default, "A failed TCP statistics read should show no activity and clear the baseline.");
+        var recovered = sampler.Sample(new(100, 100, 100), null, hasInterfaceInterval: true);
+        Expect(recovered == new TcpActivity(true, false, false), "A recovered statistic must not count traffic from the missing interval.");
+        var switched = sampler.Sample(new(101, 101, 101), null, hasInterfaceInterval: false);
+        Expect(switched == new TcpActivity(true, false, false), "An interface change invalidates the interval used for TCP indication.");
+        var next = sampler.Sample(new(101, 102, 101), null, hasInterfaceInterval: true);
+        Expect(next == new TcpActivity(true, false, true), "The first complete interval after switching must reflect current TCP activity.");
+        sampler.Reset();
+        var enabled = sampler.Sample(new(105, 110, 110), null, hasInterfaceInterval: true);
+        Expect(enabled == new TcpActivity(true, false, false), "Re-enabling the indicator must establish a fresh baseline.");
     }
 
     private static void Equal(double expected, double actual, string message) =>
