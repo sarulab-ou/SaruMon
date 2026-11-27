@@ -18,32 +18,43 @@ internal static class TrafficIconsTests
 
     private static void BarsGrowFromOppositeEdges()
     {
-        foreach (var size in new[] { 16, 20, 24, 32 })
+        foreach (var (size, border) in new[] { (16, 1), (20, 1), (24, 2), (32, 2) })
         {
             using var icons = new TrafficIcons(size);
+            using var cpuIcons = new CpuUsageIcons(size);
+            using var cpu = cpuIcons.GetIcon(50).ToBitmap();
             using var idle = icons.Idle.ToBitmap();
             using var receive = icons.GetIcon(true, 128 * 1024, 0).ToBitmap();
             using var send = icons.GetIcon(true, 0, 128 * 1024).ToBitmap();
+            using var full = icons.GetIcon(true, 16 * 1024 * 1024, 16 * 1024 * 1024).ToBitmap();
             using var offline = icons.GetIcon(false, 0, 0).ToBitmap();
             var left = size / 4;
             var right = size * 3 / 4;
-            var height = 1 + (size - 3) / 2;
+            var height = 1 + (size - 2 * border - 1) / 2;
             var green = TrafficIcons.ReceiveColor.ToArgb();
             var red = TrafficIcons.SendColor.ToArgb();
             var white = Color.White.ToArgb();
-            for (var row = 1; row < size - 1; row++)
+            for (var row = border; row < size - border; row++)
             {
-                Assert(receive.GetPixel(left, row).ToArgb() == (row <= height ? green : white), "Receive must grow from the top, one complete row at a time.");
-                Assert(send.GetPixel(right, row).ToArgb() == (row >= size - 1 - height ? red : white), "Send must grow from the bottom, one complete row at a time.");
+                Assert(receive.GetPixel(left, row).ToArgb() == (row < border + height ? green : white), "Receive must grow from the top, one complete row at a time.");
+                Assert(send.GetPixel(right, row).ToArgb() == (row >= size - border - height ? red : white), "Send must grow from the bottom, one complete row at a time.");
                 Assert(receive.GetPixel(right, row).ToArgb() == white && send.GetPixel(left, row).ToArgb() == white,
                     "A direction must leave the other half blank.");
                 Assert(idle.GetPixel(left, row).ToArgb() == white && idle.GetPixel(right, row).ToArgb() == white,
                     "Both halves must be blank while idle.");
             }
-            foreach (var bitmap in new[] { idle, receive, send, offline })
+            foreach (var bitmap in new[] { idle, receive, send, full, offline })
             {
                 Assert(bitmap.Size == new Size(size, size), "An icon must be rendered at the requested size.");
-                Assert(bitmap.GetPixel(size / 2, 1).ToArgb() == Color.White.ToArgb(), "Background must remain white across traffic states.");
+                Assert(bitmap.GetPixel(size / 2, border).ToArgb() == Color.White.ToArgb(), "Background must remain white across traffic states.");
+                for (var x = 0; x < size; x++)
+                {
+                    for (var y = 0; y < size; y++)
+                    {
+                        if (x < border || x >= size - border || y < border || y >= size - border)
+                            Assert(bitmap.GetPixel(x, y) == cpu.GetPixel(x, y), "The traffic and CPU icons must have identical frames.");
+                    }
+                }
             }
             var orange = offline.GetPixel(size / 2, size / 2);
             Assert(orange.R > orange.G && orange.G > orange.B, "Offline cross must remain orange.");

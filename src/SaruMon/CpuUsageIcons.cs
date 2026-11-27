@@ -4,7 +4,6 @@ internal sealed class CpuUsageIcons : IDisposable
 {
     private static readonly Color BarColor = Color.FromArgb(87, 192, 255);
     private static readonly Color TrackColor = Color.FromArgb(150, 150, 160);
-    private static readonly Color FrameColor = Color.FromArgb(181, 181, 186);
 
     private readonly int size;
     private readonly int borderWidth;
@@ -15,7 +14,7 @@ internal sealed class CpuUsageIcons : IDisposable
     public CpuUsageIcons(int size)
     {
         this.size = size;
-        borderWidth = Math.Max(1, Scale(1));
+        borderWidth = TrayIconImage.FrameWidth(size);
         trackWidth = size - 2 * borderWidth;
         byWidth = new Icon?[trackWidth + 2];
     }
@@ -36,7 +35,7 @@ internal sealed class CpuUsageIcons : IDisposable
     {
         using var bitmap = new Bitmap(size, size);
         using var graphics = Graphics.FromImage(bitmap);
-        graphics.Clear(FrameColor);
+        graphics.Clear(TrayIconImage.FrameColor);
 
         using var track = new SolidBrush(TrackColor);
         graphics.FillRectangle(track, borderWidth, borderWidth, trackWidth, trackWidth);
