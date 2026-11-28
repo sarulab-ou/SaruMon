@@ -55,8 +55,8 @@ dotnet run --project tests/SaruMon.Tests/SaruMon.Tests.csproj --configuration Re
 | `artifacts/publish/win-x64/SaruMon.exe` | 配布用の単一 EXE |
 | `artifacts/SaruMon-win-x64.zip` | ポータブル版・アプリ内更新用 |
 | `artifacts/SaruMon-win-x64.zip.sha256` | アプリ内更新で照合するハッシュ |
-| `artifacts/SaruMon-0.1.17-Setup-x64.exe` | v0.1.17 インストーラー |
-| `artifacts/SaruMon-0.1.17-SHA256SUMS.txt` | v0.1.17 インストーラーの SHA-256 |
+| `artifacts/SaruMon-0.1.18-Setup-x64.exe` | v0.1.18 インストーラー |
+| `artifacts/SaruMon-0.1.18-SHA256SUMS.txt` | v0.1.18 インストーラーの SHA-256 |
 
 ビルド成果物は Git に追加しません。公開手順は [releasing.md](releasing.md) を参照してください。
 
@@ -67,7 +67,7 @@ dotnet run --project tests/SaruMon.Tests/SaruMon.Tests.csproj --configuration Re
 「Windows ログイン時に起動」コンポーネントは既定で選択され、現在のユーザーのログイン時にインストール先の `SaruMon.exe --tray` を実行するよう登録します。対話形式ではチェックを外せます。サイレントインストールで登録を無効にする場合は `/NoStartup` を指定します。
 
 ```powershell
-Start-Process -FilePath '.\artifacts\SaruMon-0.1.17-Setup-x64.exe' -ArgumentList '/S', '/NoStartup' -WindowStyle Hidden -Wait
+Start-Process -FilePath '.\artifacts\SaruMon-0.1.18-Setup-x64.exe' -ArgumentList '/S', '/NoStartup' -WindowStyle Hidden -Wait
 ```
 
 ZIP 版はアプリ内で自動起動を有効にします。インストーラーの自動起動登録は、Windows の通知領域でアイコンを常時表示する設定を変更しません。表示位置は起動後に利用者が調整します。
@@ -90,7 +90,11 @@ ZIP 版はアプリ内で自動起動を有効にします。インストーラ�
 
 変更時は、バイト数だけ増えてユニキャストパケット数が増えない場合、片方向・双方向、待機・未接続を確認します。初回、カウンターのリセット、取得できないカウンターの復帰、インタフェース切り替えで過去の累積値による棒が出ないこと、通常のバイト集計が保持されることも確認します。設定を切り替えた際の表示と再起動時の設定保持を確認し、負荷を測定していない場合は CPU 使用率などの数値を推定で記載しないでください。
 
-## TCP 接続先と逆引き
+## 現在の表示と通信監視
+
+メイン画面には「通信量」と「調査」のタブがあります。アダプターの説明とIPアドレスは「監視するインタフェース」と同じ行に表示します。TCP専用表示は `TcpPeerView` が持つ監視処理を使い、一覧の更新と逆引きはビューの表示時だけ実行されます。アプリ・宛先別の表示と保存は「調査」タブが担当します。
+
+## v0.1.17までのTCP接続先と逆引き
 
 `ConnectionsView` の「現在の接続」は、選択インタフェースのローカル IP に対応する OS の TCP 接続一覧です。IPv4 / IPv6 の宛先 IP・ポート・状態・ローカル側エンドポイントを保持し、この小タブの表示中は 2 秒ごとに更新します。通常権限で取得し、接続ごとのバイト数や通信内容は含めません。
 
@@ -106,7 +110,7 @@ TCP の「ログを保存」はクリック時点のスナップショットを�
 
 逆引きは既定で無効です。`ReverseDnsResolver` はタイムアウト 2 秒、最大 256 件のメモリー内キャッシュを使用し、成功結果は 5 分、失敗結果は 1 分保持します。各ビューは最大 4 件ずつ並列に問い合わせます。逆引き無効化、対象インタフェース変更、タブ非表示時は処理をキャンセルし、IP とポートの表示を優先します。名前が取得できない場合は `—` とし、PTR 名を閲覧サイト名として扱いません。
 
-## UDP 送信先とログ保存
+## v0.1.17までのUDP送信先とログ保存
 
 `UdpConnectionsView` と `TrafficMonitorClient(MonitoringMode.Udp)` は、利用者が開始した場合だけ管理者権限の補助プロセスを起動し、Windows の ETW イベントから UDP 送信を観測します。TCP と UDP は独立したクライアント・補助プロセス・セッションを使い、片方の開始停止がもう片方に影響しません。UI プロセスは昇格しません。初期状態は停止で、停止操作・アプリ終了時に補助プロセスを終了します。タブ非表示中も観測を続けますが、表示更新と新しい逆引きは止めます。
 

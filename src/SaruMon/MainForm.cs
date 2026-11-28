@@ -22,15 +22,16 @@ internal sealed class MainForm : Form
     private readonly NotifyIcon cpuTray;
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 1000 };
     private readonly ComboBox adapter = new() { DropDownStyle = ComboBoxStyle.DropDownList, MaxDropDownItems = 12, Dock = DockStyle.Fill, AccessibleName = "監視するインタフェース" };
-    private readonly Label adapterDetail = new() { Dock = DockStyle.Fill, AutoEllipsis = true, ForeColor = Color.FromArgb(104, 116, 134) };
+    private readonly Label adapterDetail = new() { Dock = DockStyle.Fill, AutoEllipsis = true,
+        TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.FromArgb(104, 116, 134) };
     private readonly Label receiveRate = RateLabel();
     private readonly Label sendRate = RateLabel();
     private readonly Label receiveTotal = DetailLabel();
     private readonly Label sendTotal = DetailLabel();
     private readonly Label footer = DetailLabel();
     private readonly TrafficGraph graph = new() { Dock = DockStyle.Fill, Margin = new Padding(0, 16, 0, 0) };
-    private readonly ConnectionsView connections = new();
-    private readonly UdpConnectionsView udpConnections = new();
+    // Reuse the existing TCP monitor lifecycle without opening its log view.
+    private readonly TcpPeerView tcpMonitor = new() { Visible = false };
     private readonly InvestigationView investigation = new();
     private readonly ToolTip tips = new();
     private readonly CheckBox unicastOnly = new() { Text = "ユニキャスト通信だけで棒を表示", AutoSize = true, Anchor = AnchorStyles.Left };
@@ -81,13 +82,19 @@ internal sealed class MainForm : Form
         menu.Items.AddRange([file, help]);
         MainMenuStrip = menu;
 
-        var body = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24, 12, 24, 14), ColumnCount = 1, RowCount = 6 };
-        foreach (var height in new[] { 28, 40, 48 }) body.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
+        var body = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24, 12, 24, 14), ColumnCount = 1, RowCount = 5 };
+        body.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+        body.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
         body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         body.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
         body.RowStyles.Add(new RowStyle(SizeType.Absolute, 27));
 
-        body.Controls.Add(new Label { Text = "監視するインタフェース", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 0);
+        var interfaceHeading = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
+        interfaceHeading.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        interfaceHeading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        interfaceHeading.Controls.Add(new Label { Text = "監視するインタフェース", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 0, 12, 0) }, 0, 0);
+        interfaceHeading.Controls.Add(adapterDetail, 1, 0);
+        body.Controls.Add(interfaceHeading, 0, 0);
         var choose = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
         choose.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         choose.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 94));
@@ -96,7 +103,6 @@ internal sealed class MainForm : Form
         refresh.Click += (_, _) => RefreshAdapters();
         choose.Controls.Add(refresh, 1, 0);
         body.Controls.Add(choose, 0, 1);
-        body.Controls.Add(adapterDetail, 0, 2);
 
         var rates = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
         rates.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
@@ -105,8 +111,6 @@ internal sealed class MainForm : Form
         rates.Controls.Add(CreateRateCard("↑ 送信", TrafficIcons.SendColor, sendRate, sendTotal, new Padding(7, 0, 0, 0)), 1, 0);
         var tabs = new TabControl { Dock = DockStyle.Fill, Margin = Padding.Empty };
         var trafficPage = new TabPage("通信量") { BackColor = BackColor };
-        var peersPage = new TabPage("接続先（TCP）") { BackColor = Color.White };
-        var detailPage = new TabPage("UDP 送信先") { BackColor = Color.White };
         var investigationPage = new TabPage("調査");
         var trafficLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(6), Margin = Padding.Empty };
         trafficLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 112));
@@ -120,26 +124,22 @@ internal sealed class MainForm : Form
         tips.SetToolTip(legend, "アイコンの左は受信（緑、上から下）、右は送信（赤、下から上）です。棒の高さは1秒ごとの通信量に応じて変わります。");
         trafficLayout.Controls.Add(legend, 0, 2);
         trafficPage.Controls.Add(trafficLayout);
-        peersPage.Controls.Add(connections);
-        detailPage.Controls.Add(udpConnections);
         investigationPage.Controls.Add(investigation);
-        tabs.TabPages.AddRange([trafficPage, peersPage, detailPage, investigationPage]);
+        tabs.TabPages.AddRange([trafficPage, investigationPage]);
         tabs.SelectedIndexChanged += (_, _) =>
         {
             var investigating = tabs.SelectedTab == investigationPage;
             body.SuspendLayout();
             try
             {
-                body.RowStyles[0].Height = investigating ? 24 : 28;
-                body.RowStyles[2].Height = investigating ? 0 : 48;
-                body.RowStyles[4].Height = investigating ? 0 : 70;
-                body.RowStyles[5].Height = investigating ? 0 : 27;
-                foreach (var row in new[] { 2, 4, 5 })
+                body.RowStyles[3].Height = investigating ? 0 : 70;
+                body.RowStyles[4].Height = investigating ? 0 : 27;
+                foreach (var row in new[] { 3, 4 })
                     if (body.GetControlFromPosition(0, row) is { } control) control.Visible = !investigating;
             }
             finally { body.ResumeLayout(); }
         };
-        body.Controls.Add(tabs, 0, 3);
+        body.Controls.Add(tabs, 0, 2);
 
         var options = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Margin = Padding.Empty };
         options.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -176,12 +176,12 @@ internal sealed class MainForm : Form
         indicatorOptions.Controls.AddRange([unicastOnly, tcpIndicator]);
         options.Controls.Add(indicatorOptions, 0, 1);
         options.SetColumnSpan(indicatorOptions, 2);
-        tips.SetToolTip(tcpOnly, "選択したインタフェースのローカルIPでTCPを観測し、速度・合計・グラフ・通知領域の棒に表示します。\n相手ごとのTCP監視と同じ観測を使い、このPC内で完結する通信は表示から除きます。");
-        body.Controls.Add(options, 0, 4);
+        tips.SetToolTip(tcpOnly, "選択したインタフェースのローカルIPでTCPを観測し、速度・合計・グラフ・通知領域の棒に表示します。\nこのPC内で完結する通信は表示から除きます。");
+        body.Controls.Add(options, 0, 3);
         footer.Text = "1秒ごとに更新 · × を押しても監視を続けます";
         footer.Dock = DockStyle.Fill;
         footer.TextAlign = ContentAlignment.MiddleLeft;
-        body.Controls.Add(footer, 0, 5);
+        body.Controls.Add(footer, 0, 4);
         Controls.Add(body);
         Controls.Add(menu);
 
@@ -271,13 +271,13 @@ internal sealed class MainForm : Form
 
     private void UpdateAdapterDetail()
     {
-        connections.SetInterface((adapter.SelectedItem as AdapterChoice)?.Interface);
-        udpConnections.SetInterface((adapter.SelectedItem as AdapterChoice)?.Interface);
-        investigation.SetInterface((adapter.SelectedItem as AdapterChoice)?.Interface);
-        if (adapter.SelectedItem is not AdapterChoice choice) { adapterDetail.Text = "利用できるインタフェースがありません。"; return; }
-        var item = choice.Interface;
-        adapterDetail.Text = item == null ? "再接続を待っています。このインタフェースの選択を保持します。" :
-            item.Description + "\n" + (item.Addresses.Count == 0 ? "IP アドレスなし" : string.Join("  /  ", item.Addresses));
+        var choice = adapter.SelectedItem as AdapterChoice;
+        var item = choice?.Interface;
+        tcpMonitor.SetInterface(item);
+        investigation.SetInterface(item);
+        adapterDetail.Text = item is not null
+            ? item.Description + "  ·  " + (item.Addresses.Count == 0 ? "IP アドレスなし" : string.Join("  /  ", item.Addresses))
+            : choice is null ? "利用できるインタフェースがありません。" : "再接続を待っています。";
         tips.SetToolTip(adapterDetail, adapterDetail.Text);
     }
 
@@ -288,7 +288,7 @@ internal sealed class MainForm : Form
         var selected = adapter.SelectedItem as AdapterChoice;
         var sample = selected == null ? null : sampler.Sample(TrafficNetwork.ReadCounters(selected.Id), clock.Elapsed);
         latestSample = sample;
-        tcpTraffic = tcpTrafficMeter.Read(connections.LiveTraffic);
+        tcpTraffic = tcpTrafficMeter.Read(tcpMonitor.LiveTraffic);
         if (!tcpOnlyMode && settings.TcpActivityIndicator && sample?.IsAvailable == true)
             latestTcpActivity = tcpIndicatorSampler.Read(sample.HasRate);
         else if (latestTcpActivity.HasValue)
@@ -339,8 +339,8 @@ internal sealed class MainForm : Form
         RenderTraffic(addGraphSample: false);
         try
         {
-            if (enabled) await connections.StartTcpTrafficDisplayAsync();
-            else await connections.StopTcpTrafficDisplayAsync();
+            if (enabled) await tcpMonitor.StartForTrafficDisplayAsync();
+            else await tcpMonitor.StopForTrafficDisplayAsync();
         }
         finally
         {
@@ -348,7 +348,7 @@ internal sealed class MainForm : Form
             if (!IsDisposed && !shuttingDown)
             {
                 tcpOnly.Enabled = tcpOnlyMenu.Enabled = true;
-                var error = connections.TcpMonitorError;
+                var error = tcpMonitor.MonitorError;
                 if (error is not null) footer.Text = error;
                 RenderTraffic(addGraphSample: false);
             }
@@ -419,7 +419,7 @@ internal sealed class MainForm : Form
         }
         if (tcpOnlyMode && sample?.IsAvailable == true)
         {
-            if (tcpTraffic is null) status = changingTcpMode ? "管理者確認中" : connections.IsTcpMonitorRunning ? "計測待ち" : "観測停止中";
+            if (tcpTraffic is null) status = changingTcpMode ? "管理者確認中" : tcpMonitor.IsMonitorRunning ? "計測待ち" : "観測停止中";
             else if (tcpTraffic.Incomplete) status += "（一部未計測）";
         }
         var mode = tcpOnlyMode ? "TCP観測" : useTcp ? (onlyUnicast ? "TCP目安・ユニキャスト" : "TCP目安") : (onlyUnicast ? "ユニキャスト" : "全通信");
@@ -471,7 +471,7 @@ internal sealed class MainForm : Form
         "SaruMon アイコンを常に表示する", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
     private void ShowHelp() => MessageBox.Show(this,
-        "1. 監視するインタフェースを選択します。\n2. 通知領域に格納すると、白地の棒グラフで通信量を確認できます。\n\n左の緑は受信で、上から下へ伸びます。右の赤は送信で、下から上へ伸びます。\n1秒ごとに、通信量に応じて1ピクセル刻みで伸びます。約8.2 kbps以下の通信は1ピクセル、約134.2 Mbps以上は最大の高さです。\n通信がない方向の棒は消え、未接続はオレンジの × です。\n「ユニキャスト通信だけで棒を表示」をオンにすると、ユニキャスト通信があった方向だけ棒を表示します。高さはその方向の全通信量です。\n管理者権限は不要で、TCP・UDPとLAN内の個別通信を含みます。設定は次回起動時も引き継ぎます。\n「TCP通信の目安で棒を表示」では、選択した回線とPC全体のTCPで同じ区間に通信が増えた方向を表示します。高さはその方向の全通信量です。\nPC内や別回線のTCPが選択回線のUDPと重なると点灯する場合があります。管理者権限は不要です。\n「TCP通信だけを表示（管理者権限）」をオンにすると、選択したインタフェースのローカルIPに対応するTCPの棒・速度・合計・グラフを表示します。\nPC内で完結する通信は除きます。TCP観測は起動時にオフです。\n通常時と目安モードの速度・合計・グラフはインタフェース全体の値です。\n速度はビット毎秒（bps、kbps、Mbpsなど）で表示します。合計の単位はバイトです。\n合計は現在のインタフェースを選択してからの通信量です。\n\n「接続先（TCP）」タブで IP・宛先ポート・接続状態を確認できます。\n「相手ごとの通信量」で監視を開始すると、相手 IP ごとの上り・下り合計を記録します。\n「ログを保存」で、相手 IP・名前・上り合計・下り合計・接続回数・開始時刻・最終時刻を CSV に保存できます。\n「リセット」で相手別ログを消去します。監視中は新しい集計を続けます。\n接続回数は監視中に観測した分です。監視前からの接続は回数に含めません。\n開始・最終時刻は、その相手を最初・最後に観測した時刻です。\n「逆引き」をオンにすると、DNS で取得したホスト名も表示します。\nホスト名は閲覧サイト名とは限りません。\n\n「UDP 送信先」で「開始」を押すと、管理者承認後に UDP 送信を記録します。\n「保存」で、開始時刻・最終時刻・送信イベント数・累積送信量を CSV に保存できます。\n「リセット」で UDP 送信先ログを消去します。監視中はリセット後の送信から集計を続けます。\nUDP の開始・最終時刻は、最初・最後に送信を観測した時刻です。\n監視開始前の通信は含みません。停止後も保存でき、再開・インタフェース変更で記録をクリアします。\n\nアイコンが隠れている場合は、タスクバー右端の ∧ を開き、SaruMon を時計の近くへドラッグしてください。\nアイコンのクリック、または SaruMon の再起動で画面が開きます。\n終了するには、メニューの「終了」を選びます。\n\n更新は「ヘルプ → 更新を確認」から実行できます。",
+        "1. 監視するインタフェースを選択します。\n2. 通知領域に格納すると、白地の棒グラフで通信量を確認できます。\n\n左の緑は受信で、上から下へ伸びます。右の赤は送信で、下から上へ伸びます。\n1秒ごとに、通信量に応じて1ピクセル刻みで伸びます。約8.2 kbps以下の通信は1ピクセル、約134.2 Mbps以上は最大の高さです。\n通信がない方向の棒は消え、未接続はオレンジの × です。\n「ユニキャスト通信だけで棒を表示」をオンにすると、ユニキャスト通信があった方向だけ棒を表示します。高さはその方向の全通信量です。\n管理者権限は不要で、TCP・UDPとLAN内の個別通信を含みます。設定は次回起動時も引き継ぎます。\n「TCP通信の目安で棒を表示」では、選択した回線とPC全体のTCPで同じ区間に通信が増えた方向を表示します。高さはその方向の全通信量です。\nPC内や別回線のTCPが選択回線のUDPと重なると点灯する場合があります。管理者権限は不要です。\n「TCP通信だけを表示（管理者権限）」をオンにすると、選択したインタフェースのローカルIPに対応するTCPの棒・速度・合計・グラフを表示します。\nPC内で完結する通信は除きます。TCP観測は起動時にオフです。\n通常時と目安モードの速度・合計・グラフはインタフェース全体の値です。\n速度はビット毎秒（bps、kbps、Mbpsなど）で表示します。合計の単位はバイトです。\n合計は現在のインタフェースを選択してからの通信量です。\n\n「調査」タブの「記録開始（管理者）」でTCP・UDP通信を記録します。\n「アプリ別」または「宛先別」でまとめ、同じIPへの通信の内訳を確認できます。\n上りはTCPとUDPの合計、下りはTCPの観測量です。\n停止後も「調査レポート…」でMarkdown、「全件CSV…」で集計を保存できます。「デモ」は架空データです。\n\nアイコンが隠れている場合は、タスクバー右端の ∧ を開き、SaruMon を時計の近くへドラッグしてください。\nアイコンのクリック、または SaruMon の再起動で画面が開きます。\n終了するには、メニューの「終了」を選びます。\n\n更新は「ヘルプ → 更新を確認」から実行できます。",
         "SaruMon の使い方", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
     public async void RequestExit()
@@ -482,8 +482,7 @@ internal sealed class MainForm : Form
         Enabled = false;
         try
         {
-            await connections.ShutdownAsync();
-            await udpConnections.ShutdownAsync();
+            await tcpMonitor.ShutdownAsync();
             await investigation.ShutdownAsync();
         }
         catch (Exception ex)
@@ -522,6 +521,7 @@ internal sealed class MainForm : Form
             trayMenu?.Dispose();
             cpuMeter.Dispose();
             cpuIcons.Dispose();
+            tcpMonitor.Dispose();
             tips.Dispose();
             icons.Dispose();
         }
