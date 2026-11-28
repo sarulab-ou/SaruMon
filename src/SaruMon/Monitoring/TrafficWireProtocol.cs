@@ -24,11 +24,20 @@ internal sealed class InvestigationBatches
     private readonly Dictionary<InvestigationKey, InvestigationRow> pending = new();
     private IReadOnlyList<InvestigationRow> latest = Array.Empty<InvestigationRow>();
     private int nextChunk;
+    private long revision;
     private DateTimeOffset batchTime;
 
     internal InvestigationSnapshot? Add(TrafficMessage message)
     {
-        if (message.Chunk != nextChunk || nextChunk > 0 && message.SampledAt != batchTime)
+        if (message.Revision > revision)
+        {
+            rows.Clear();
+            pending.Clear();
+            latest = Array.Empty<InvestigationRow>();
+            nextChunk = 0;
+            revision = message.Revision;
+        }
+        if (message.Revision != revision || message.Chunk != nextChunk || nextChunk > 0 && message.SampledAt != batchTime)
             throw new InvalidDataException("調査データの順序が不正です。");
         batchTime = message.SampledAt;
         foreach (var row in message.InvestigationRows!)

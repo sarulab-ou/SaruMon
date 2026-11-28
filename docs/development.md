@@ -55,8 +55,8 @@ dotnet run --project tests/SaruMon.Tests/SaruMon.Tests.csproj --configuration Re
 | `artifacts/publish/win-x64/SaruMon.exe` | 配布用の単一 EXE |
 | `artifacts/SaruMon-win-x64.zip` | ポータブル版・アプリ内更新用 |
 | `artifacts/SaruMon-win-x64.zip.sha256` | アプリ内更新で照合するハッシュ |
-| `artifacts/SaruMon-0.1.23-Setup-x64.exe` | v0.1.23 インストーラー |
-| `artifacts/SaruMon-0.1.23-SHA256SUMS.txt` | v0.1.23 インストーラーの SHA-256 |
+| `artifacts/SaruMon-0.1.24-Setup-x64.exe` | v0.1.24 インストーラー |
+| `artifacts/SaruMon-0.1.24-SHA256SUMS.txt` | v0.1.24 インストーラーの SHA-256 |
 
 ビルド成果物は Git に追加しません。公開手順は [releasing.md](releasing.md) を参照してください。
 
@@ -67,7 +67,7 @@ dotnet run --project tests/SaruMon.Tests/SaruMon.Tests.csproj --configuration Re
 「Windows ログイン時に起動」コンポーネントは既定で選択され、現在のユーザーのログイン時にインストール先の `SaruMon.exe --tray` を実行するよう登録します。対話形式ではチェックを外せます。サイレントインストールで登録を無効にする場合は `/NoStartup` を指定します。
 
 ```powershell
-Start-Process -FilePath '.\artifacts\SaruMon-0.1.23-Setup-x64.exe' -ArgumentList '/S', '/NoStartup' -WindowStyle Hidden -Wait
+Start-Process -FilePath '.\artifacts\SaruMon-0.1.24-Setup-x64.exe' -ArgumentList '/S', '/NoStartup' -WindowStyle Hidden -Wait
 ```
 
 ZIP 版はアプリ内で自動起動を有効にします。インストーラーの自動起動登録は、Windows の通知領域でアイコンを常時表示する設定を変更しません。表示位置は起動後に利用者が調整します。
@@ -95,6 +95,10 @@ ZIP 版はアプリ内で自動起動を有効にします。インストーラ�
 メイン画面には「通信量」「調査」「タスク」のタブがあります。アダプターの説明とIPアドレスは「監視するインタフェース」と同じ行に表示します。TCP専用表示は `TcpPeerView` が持つ監視処理を使い、一覧の更新と逆引きはビューの表示時だけ実行されます。アプリ・宛先別の表示と保存は「調査」タブが担当します。
 
 「通信量」と「調査」は白基調の `DashboardStyle` と5分のグラフを共有します。「通信量」は常に回線全体のカウンターを使います。タブ表示中に、通常権限でTCP接続表から宛先・ポート・状態・PIDを、UDPエンドポイント表からローカルIP・ポート・PIDを取得します。UDPは選択回線のローカルIPに一致する行と、その回線で利用できるアドレス種別の全インタフェース向けの行を表示します。更新は既存の2秒間隔の処理でまとめて行い、回線が切り替わった後に届いた旧回線の結果は破棄します。片方の表を取得できない場合は取得不可と表示し、取得できた表は表示します。
+
+「通信量」の「DNSで逆引き」は初期設定ではオフです。オンの間は、現在表示されているTCP宛先のキャッシュにないIPを最大4件ずつ非同期に問い合わせます。ホスト名は表示に添え、集約と選択のキーにはIPを使います。チェックを外したとき、タブが隠れたとき、または回線が切り替わったときは処理をキャンセルします。
+
+「通信量」のリセットは回線カウンターの基準値とグラフを初期化し、「タスク」のリセットはプロセスごとのCPU計測の基準値を初期化します。「調査」のリセットは、既存の補助プロセスに集計の初期化を要求します。補助プロセスはETWイベントの時刻でリセット前の通信を除外し、集計を続けます。画面側では旧リビジョンの集計と分割データを破棄し、新しいリビジョンの最初の集計で完了を確認します。
 
 「タスク」は表示中だけ、バックグラウンドで約1秒ごとに Windows のプロセス一覧を読み取ります。CPU使用率は同じPID・開始時刻の累積CPU時間の差を、経過時間と全論理プロセッサ数で割って計算します。親の名前は、一覧に同じ親PIDがあり、開始時刻から親子関係を確認できるときに表示します。実行ファイルのパスは選択時に取得します。各タブの終了メニューは表示時点の対象を保持し、操作時に開始時刻とWindowsの重要プロセス指定を確認します。強制終了には確認したプロセスと同じハンドルを使います。
 

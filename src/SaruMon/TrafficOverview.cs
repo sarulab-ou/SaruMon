@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Net;
 using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using SaruMon.Core;
 using SaruMon.Monitoring;
 using static SaruMon.DashboardStyle;
@@ -13,6 +14,7 @@ internal sealed class TrafficOverview : UserControl
     private readonly System.Windows.Forms.Timer refresh = new() { Interval = 2000 };
     private readonly Func<IPAddress[], IReadOnlyList<TcpConnectionInfo>> readTcp;
     private readonly Func<IPAddress[], IReadOnlyList<UdpEndpointInfo>> readUdp;
+    private readonly ReverseDnsResolver resolver;
     private readonly TrafficGraph graph = new() { Dock = DockStyle.Fill, Margin = new Padding(0, 2, 0, 4) };
     private readonly Label receive = Caption();
     private readonly Label send = Caption();
@@ -21,21 +23,25 @@ internal sealed class TrafficOverview : UserControl
     private readonly Label endpoint = Caption();
     private readonly Button applications = ActionButton("アプリ別", accent: true);
     private readonly Button destinations = ActionButton("宛先別");
+    private readonly Button reset = ActionButton("リセット");
+    private readonly CheckBox reverseDns = new() { Text = "DNSで逆引き", AutoSize = true, Margin = new Padding(8, 5, 0, 0) };
     private readonly ResultGrid overview = new("TCP 接続と UDP ローカルポートの集計");
     private readonly ResultGrid details = new("選択した項目の内訳");
     private (string Id, string Addresses)? selection;
     private IPAddress[] addresses = [];
     private LiveSnapshot? snapshot;
+    private CancellationTokenSource? dnsCancellation;
     private bool byDestination;
     private bool updating;
     private bool reading;
     private int revision;
 
     internal TrafficOverview(Func<IPAddress[], IReadOnlyList<TcpConnectionInfo>>? readTcp = null,
-        Func<IPAddress[], IReadOnlyList<UdpEndpointInfo>>? readUdp = null)
+        Func<IPAddress[], IReadOnlyList<UdpEndpointInfo>>? readUdp = null, ReverseDnsResolver? resolver = null)
     {
         this.readTcp = readTcp ?? TcpConnections.ReadWithOwners;
         this.readUdp = readUdp ?? UdpEndpoints.ReadWithOwners;
+        this.resolver = resolver ?? new ReverseDnsResolver();
         Dock = DockStyle.Fill;
         BackColor = Canvas;
         ForeColor = Ink;
@@ -55,7 +61,7 @@ internal sealed class TrafficOverview : UserControl
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
         layout.Controls.Add(summary, 0, 0);
         layout.Controls.Add(graph, 0, 1);
-        layout.Controls.Add(Strip(applications, destinations), 0, 2);
+        layout.Controls.Add(Strip(applications, destinations, reset, reverseDns), 0, 2);
 
         var tables = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Margin = Padding.Empty };
         tables.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 44));
@@ -72,8 +78,17 @@ internal sealed class TrafficOverview : UserControl
 
         applications.Click += (_, _) => SelectGrouping(false);
         destinations.Click += (_, _) => SelectGrouping(true);
+        reset.Click += (_, _) => ResetRequested?.Invoke(this, EventArgs.Empty);
+        reverseDns.CheckedChanged += (_, _) =>
+        {
+            if (!reverseDns.Checked) CancelDns();
+            RenderConnections();
+            ReverseDnsChanged?.Invoke(this, EventArgs.Empty);
+        };
         overview.Control.SelectionChanged += (_, _) => { if (!updating) RenderDetails(); };
         details.Control.SelectionChanged += (_, _) => { if (!updating) RenderEndpoint(); };
+        overview.Control.Scroll += (_, _) => StartDns();
+        details.Control.Scroll += (_, _) => StartDns();
         details.Control.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.DisplayedCellsExceptHeaders;
         details.Control.ShowCellToolTips = false;
         ProcessContextMenu.Attach(overview, Owners);
@@ -90,12 +105,23 @@ internal sealed class TrafficOverview : UserControl
             else
             {
                 refresh.Stop();
+                CancelDns();
                 revision++;
             }
         };
         SetSample(null, addGraphSample: false);
         RenderConnections();
     }
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    internal bool ReverseDnsEnabled
+    {
+        get => reverseDns.Checked;
+        set => reverseDns.Checked = value;
+    }
+
+    internal event EventHandler? ReverseDnsChanged;
+    internal event EventHandler? ResetRequested;
 
     internal void SetSample(TrafficSample? sample, bool addGraphSample)
     {
@@ -121,6 +147,7 @@ internal sealed class TrafficOverview : UserControl
     protected override void OnHandleDestroyed(EventArgs e)
     {
         if (!Disposing && !IsDisposed) refresh.Stop();
+        CancelDns();
         revision++;
         base.OnHandleDestroyed(e);
     }
@@ -134,6 +161,7 @@ internal sealed class TrafficOverview : UserControl
         selection = key;
         addresses = next;
         revision++;
+        CancelDns();
         snapshot = null;
         RenderConnections();
         if (Visible && IsHandleCreated && next.Length > 0)
@@ -216,7 +244,8 @@ internal sealed class TrafficOverview : UserControl
                 details.Headers(("PID / アプリ", 120), ("ポート", 77), ("件数", 50), ("状態別の件数", 158));
                 overview.Set(Group(rows.Where(row => !row.IsUdp), row => row.Address)
                     .Select(group => new ResultRow(group.Key, group.ToArray(),
-                        [group.Key, group.Select(row => row.ProcessId).OfType<int>().Distinct().Count().ToString(), group.Count().ToString()])).ToArray());
+                        [AddressLabel(group.First()), group.Select(row => row.ProcessId).OfType<int>().Distinct().Count().ToString(),
+                            group.Count().ToString()])).ToArray());
             }
             else
             {
@@ -227,6 +256,12 @@ internal sealed class TrafficOverview : UserControl
                         [group.First().Application, group.Key, CountRows(group.Count(row => !row.IsUdp), snapshot?.TcpCount),
                             CountRows(group.Count(row => row.IsUdp), snapshot?.UdpCount)])).ToArray());
             }
+            overview.Control.Columns[0].DefaultCellStyle.WrapMode = byDestination && reverseDns.Checked
+                ? DataGridViewTriState.True : DataGridViewTriState.False;
+            overview.Control.AutoSizeRowsMode = byDestination && reverseDns.Checked
+                ? DataGridViewAutoSizeRowsMode.DisplayedCellsExceptHeaders : DataGridViewAutoSizeRowsMode.None;
+            details.Control.Columns[0].DefaultCellStyle.WrapMode = !byDestination && reverseDns.Checked
+                ? DataGridViewTriState.True : DataGridViewTriState.False;
             details.Control.Columns[3].DefaultCellStyle.WrapMode = DataGridViewTriState.True;
         }
         finally { updating = false; }
@@ -246,7 +281,8 @@ internal sealed class TrafficOverview : UserControl
     private void RenderDetails()
     {
         var rows = overview.Selected?.Value as LiveSocket[] ?? [];
-        detailTitle.Text = overview.Selected is { } group ? $"{group.Cells[0]} の内訳" : "選択した項目の内訳";
+        detailTitle.Text = overview.Selected is { } group
+            ? $"{(byDestination ? group.Key : group.Cells[0])} の内訳" : "選択した項目の内訳";
         updating = true;
         try
         {
@@ -256,11 +292,71 @@ internal sealed class TrafficOverview : UserControl
                 : rows.GroupBy(row => (row.IsUdp, row.Address))
                     .OrderBy(group => group.Key.IsUdp).ThenByDescending(group => group.Count())
                     .ThenBy(group => group.Key.Address, StringComparer.Ordinal)
-                    .Select(group => DetailRow(group.Key, group.Key.Address, group.ToArray()));
+                    .Select(group => DetailRow(group.Key, AddressLabel(group.First()), group.ToArray()));
             details.Set(grouped.ToArray());
         }
         finally { updating = false; }
         RenderEndpoint();
+        StartDns();
+    }
+
+    private string? HostName(LiveSocket row) =>
+        reverseDns.Checked && !row.IsUdp && resolver.TryGetCached(row.DisplayAddress, out var name) && name is not null
+            ? name : null;
+
+    private string AddressLabel(LiveSocket row) =>
+        HostName(row) is { } name ? $"{row.Address}{Environment.NewLine}{name}" : row.Address;
+
+    private IPAddress[] DnsCandidates()
+    {
+        var grid = byDestination ? overview : details;
+        var first = grid.Control.FirstDisplayedScrollingRowIndex;
+        if (first < 0) return [];
+
+        var count = grid.Control.DisplayedRowCount(includePartialRow: true);
+        return Enumerable.Range(first, count)
+            .Select(index => (grid.RowAt(index)?.Value as LiveSocket[])?.FirstOrDefault())
+            .Where(row => row is { IsUdp: false }).Select(row => row!.DisplayAddress)
+            .Distinct().Where(ip => !resolver.TryGetCached(ip, out _)).Take(4).ToArray();
+    }
+
+    private void StartDns()
+    {
+        if (updating || !reverseDns.Checked || dnsCancellation is not null || !Visible || !IsHandleCreated || Disposing || IsDisposed) return;
+        var pending = DnsCandidates();
+        if (pending.Length == 0) return;
+        dnsCancellation = new CancellationTokenSource();
+        _ = ResolveNamesAsync(pending, dnsCancellation);
+    }
+
+    private async Task ResolveNamesAsync(IPAddress[] pending, CancellationTokenSource cancellation)
+    {
+        try
+        {
+            while (pending.Length > 0)
+            {
+                var names = await Task.WhenAll(pending.Select(ip => resolver.ResolveAsync(ip, cancellation.Token)));
+                if (cancellation.IsCancellationRequested || Disposing || IsDisposed || !Visible) return;
+                if (names.Any(name => name is not null)) RenderConnections();
+                pending = DnsCandidates();
+            }
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        catch (Exception ex) when (ex is SocketException or ArgumentException or InvalidOperationException)
+        {
+            Debug.WriteLine("SaruMon reverse DNS: " + ex);
+        }
+        finally
+        {
+            if (ReferenceEquals(dnsCancellation, cancellation)) dnsCancellation = null;
+            cancellation.Dispose();
+        }
+    }
+
+    private void CancelDns()
+    {
+        dnsCancellation?.Cancel();
+        dnsCancellation = null;
     }
 
     private static ResultRow DetailRow(object key, string label, LiveSocket[] rows)
@@ -287,7 +383,8 @@ internal sealed class TrafficOverview : UserControl
             ? $"{new IPEndPoint(row.LocalAddress, row.LocalPort)} → {remote}"
             : $"{row.Address} · ポート {cells[1]}";
         var counts = row.IsUdp ? row.UdpScope : cells[3].Replace(Environment.NewLine, " / ", StringComparison.Ordinal);
-        endpoint.Text = $"{scope} {location} · {cells[2]} 件 · {counts} · {row.Application} · PID {row.PidLabel}";
+        var host = HostName(row) is { } name ? $"{name} · " : "";
+        endpoint.Text = $"{host}{scope} {location} · {cells[2]} 件 · {counts} · {row.Application} · PID {row.PidLabel}";
     }
 
     internal static string Rate(double? bytesPerSecond) => bytesPerSecond.HasValue ? MainForm.FormatBitRate(bytesPerSecond.Value) : "—";
@@ -304,7 +401,11 @@ internal sealed class TrafficOverview : UserControl
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) refresh.Dispose();
+        if (disposing)
+        {
+            CancelDns();
+            refresh.Dispose();
+        }
         base.Dispose(disposing);
     }
 
@@ -317,12 +418,13 @@ internal sealed class TrafficOverview : UserControl
         internal string Application => Owner.Name;
         internal string PidLabel => ProcessId?.ToString() ?? "—";
         internal int Port => Remote?.Port ?? LocalPort;
-        internal string Address
+        internal string Address => DisplayAddress.ToString();
+        internal IPAddress DisplayAddress
         {
             get
             {
                 var address = Remote?.Address ?? LocalAddress;
-                return (address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address).ToString();
+                return address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
             }
         }
         internal string UdpScope => LocalAddress.Equals(IPAddress.Any) || LocalAddress.Equals(IPAddress.Any.MapToIPv6()) ? "全 IPv4"

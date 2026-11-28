@@ -72,7 +72,8 @@ internal static class InvestigationTests
         SavesBoundedReportsAndAggregateCsv();
         ValidatesWireRowsAndStartupMatches();
         RetainsCumulativeRowsAcrossBatchesAndStop();
-        return 6;
+        ResetsCaptureAndRejectsBufferedEvents();
+        return 7;
     }
 
     private static void CombinesTcpAndUdpByAddress()
@@ -202,6 +203,12 @@ internal static class InvestigationTests
             && first.Rows.Single(row => row.Key.Port == 1).Sent == 5 && final.Incomplete,
             "A final delta must replace updated rows, preserve other rows, and retain the loss marker.");
 
+        Assert(batches.Add(RoundTrip(message)) is null, "A partial batch from the old revision can be pending at reset.");
+        var reset = batches.Add(RoundTrip(message with { Revision = 2, More = false, SampledAt = Started.AddSeconds(3),
+            InvestigationRows = [rows[0] with { Sent = 1, Received = 0, FirstSeen = Started.AddSeconds(3), LastSeen = Started.AddSeconds(3) }] }))!;
+        Assert(reset.Rows.Count == 1 && reset.Rows[0].Sent == 1 && !reset.Incomplete,
+            "The new revision starts at chunk zero and drops all old rows, pending chunks and loss indicators.");
+
         static TrafficMessage RoundTrip(TrafficMessage message)
         {
             var json = System.Text.Json.JsonSerializer.Serialize(message, TrafficWireProtocol.JsonOptions);
@@ -209,6 +216,33 @@ internal static class InvestigationTests
             TrafficWireProtocol.ValidateSnapshot(read, MonitoringMode.Investigation);
             return read;
         }
+    }
+
+    private static void ResetsCaptureAndRejectsBufferedEvents()
+    {
+        var local = IPAddress.Parse("192.0.2.10");
+        var remote = IPAddress.Parse("198.51.100.24");
+        var capture = new InvestigationCapture([local], capacity: 2,
+            resolve: (_, _) => (Started.UtcTicks, @"C:\Apps\Fixture.exe"));
+        capture.Record(InvestigationProtocol.Tcp, 10, local, remote, 443, 100, false, Started.AddSeconds(1), 10);
+        capture.Record(InvestigationProtocol.Udp, 10, local, remote, 443, 200, false, Started.AddSeconds(1), 11);
+        capture.Record(InvestigationProtocol.Udp, 10, local, remote, 444, 400, false, Started.AddSeconds(1), 12);
+        Assert(capture.TakeUpdates(out var lost).Length == 2 && lost == 1, "Fixture reaches capacity before reset.");
+        capture.Record(InvestigationProtocol.Tcp, 10, local, remote, 443, 20, true, Started.AddSeconds(2), 19);
+        capture.ResetLog(20);
+        Assert(capture.TakeUpdates(out lost).Length == 0 && lost == 0, "Reset clears rows, unpublished updates and the loss counter.");
+
+        var resumed = Started.AddSeconds(3);
+        capture.Record(InvestigationProtocol.Tcp, 10, local, remote, 443, 999, false, Started.AddSeconds(2), 19);
+        capture.Record(InvestigationProtocol.Tcp, 10, local, remote, 443, 7, false, resumed, 20);
+        capture.Record(InvestigationProtocol.Tcp, 10, local, remote, 443, 8, true, resumed, 21);
+        capture.Record(InvestigationProtocol.Udp, 10, local, remote, 444, 9, false, resumed, 22);
+        var after = capture.TakeUpdates(out lost);
+        Assert(after.Length == 2 && lost == 0 && after.All(row => row.FirstSeen == resumed && row.LastSeen == resumed
+            && row.Key.Process.StartedUtcTicks == Started.UtcTicks)
+            && after.Single(row => row.Key.Protocol == InvestigationProtocol.Tcp) is { Sent: 7, Received: 8, Events: 2 }
+            && after.Single(row => row.Key.Protocol == InvestigationProtocol.Udp) is { Sent: 9, Received: 0, Events: 1 },
+            "Only events at or after the reset boundary count, with process identity and capacity still available.");
     }
 
     private static void Assert(bool condition, string message)

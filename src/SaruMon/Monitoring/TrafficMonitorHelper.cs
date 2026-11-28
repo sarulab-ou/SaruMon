@@ -107,12 +107,12 @@ internal static class TrafficMonitorHelper
                     if (message is null) return;
                     if (message.Mode != arguments.Mode) throw new InvalidDataException("監視対象の種類が一致しません。");
                     if (message.Type == "stop") return;
-                    if (investigation is not null) throw new InvalidDataException("調査中の対象は固定されています。");
                     lock (stateGate)
                     {
                         if (message.Revision <= revision) throw new InvalidDataException("監視設定の順序が不正です。");
                         if (message.Type == "configure")
                         {
+                            if (investigation is not null) throw new InvalidDataException("調査中の対象は固定されています。");
                             var updated = TrafficWireProtocol.ParseAddresses(message.Addresses);
                             // Even adapters sharing an address set must start a fresh observation window.
                             SetAddresses(Array.Empty<IPAddress>());
@@ -123,7 +123,8 @@ internal static class TrafficMonitorHelper
                             logLossBaseline = session.Loss;
                             // The ETW session and Stopwatch both use the Windows performance counter.
                             var cutoff = Stopwatch.GetTimestamp();
-                            if (tcpTracker is not null) tcpTracker.ResetPeers(cutoff);
+                            if (investigation is not null) investigation.ResetLog(cutoff);
+                            else if (tcpTracker is not null) tcpTracker.ResetPeers(cutoff);
                             else udpTracker!.ResetFlows(cutoff);
                         }
                         else throw new InvalidDataException("監視コマンドが不正です。");
@@ -193,6 +194,8 @@ internal static class TrafficMonitorHelper
         TrafficMessage CreateSnapshot(bool failed = false)
         {
             var loss = session!.Loss;
+            var lostEvents = unchecked(loss.Events - logLossBaseline.Events);
+            var lostBuffers = loss.Buffers != logLossBaseline.Buffers;
             if (investigation is not null)
             {
                 if (loss != lastInvestigationLoss)
@@ -202,11 +205,10 @@ internal static class TrafficMonitorHelper
                 }
                 var updates = investigation.TakeUpdates(out var omitted);
                 return new TrafficMessage("snapshot", Revision: revision, Mode: arguments.Mode,
-                    DroppedEvents: InvestigationCapture.Add(omitted, loss.Events), CaptureLoss: failed || loss.Buffers > 0,
+                    DroppedEvents: InvestigationCapture.Add(omitted, lostEvents), CaptureLoss: failed || lostBuffers,
                     InvestigationRows: updates, SampledAt: DateTimeOffset.UtcNow);
             }
             var dropped = udpTracker?.DroppedEvents ?? tcpTracker!.DroppedEvents;
-            var lostEvents = unchecked(loss.Events - logLossBaseline.Events);
             var totalDropped = dropped > long.MaxValue - lostEvents ? long.MaxValue : dropped + lostEvents;
             TcpPeerInfo[]? peers = null;
             TcpTrafficReading? traffic = null;
@@ -217,7 +219,7 @@ internal static class TrafficMonitorHelper
             }
             return new TrafficMessage("snapshot", UdpFlows: udpTracker?.Snapshot().ToArray(),
                 TcpPeers: peers, Revision: revision, Mode: arguments.Mode,
-                DroppedEvents: totalDropped, CaptureLoss: failed || loss.Buffers != logLossBaseline.Buffers, TcpTraffic: traffic);
+                DroppedEvents: totalDropped, CaptureLoss: failed || lostBuffers, TcpTraffic: traffic);
         }
 
         async Task WriteSnapshotAsync(TrafficMessage message, CancellationToken token)

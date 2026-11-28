@@ -24,6 +24,7 @@ internal sealed class InvestigationCapture
     private readonly int capacity;
     private readonly Func<int, DateTimeOffset, (long Started, string? Path)> resolve;
     private long dropped;
+    private long logCutoff = long.MinValue;
 
     internal InvestigationCapture(IEnumerable<IPAddress> addresses, int capacity = TrafficWireProtocol.MaxEntries,
         Func<int, DateTimeOffset, (long Started, string? Path)>? resolve = null)
@@ -73,6 +74,17 @@ internal sealed class InvestigationCapture
         lock (gate) identities.Clear();
     }
 
+    internal void ResetLog(long cutoff)
+    {
+        lock (gate)
+        {
+            logCutoff = cutoff;
+            entries.Clear();
+            dirty.Clear();
+            dropped = 0;
+        }
+    }
+
     internal void Record(InvestigationProtocol protocol, int pid, IPAddress local, IPAddress remote, int port,
         long bytes, bool receiving, DateTimeOffset time, long timestamp)
     {
@@ -83,6 +95,7 @@ internal sealed class InvestigationCapture
         pid = Math.Max(pid, 0);
         lock (gate)
         {
+            if (timestamp < logCutoff) return;
             var identity = IdentityFor(pid, timestamp, time);
             var process = new InvestigationProcess(pid, identity?.Started ?? 0);
             var key = (process, remote, port, protocol);

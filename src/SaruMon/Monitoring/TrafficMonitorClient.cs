@@ -136,7 +136,6 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
 
     public async Task ResetLogAsync(CancellationToken token)
     {
-        if (mode == MonitoringMode.Investigation) throw new InvalidOperationException("新しい調査を開始してください。");
         await gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
@@ -148,7 +147,8 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
             {
                 nextRevision = ++revision;
                 if (mode == MonitoringMode.Udp) Volatile.Write(ref udpSnapshot, Array.Empty<UdpFlowInfo>());
-                else Volatile.Write(ref tcpSnapshot, Array.Empty<TcpPeerInfo>());
+                else if (mode == MonitoringMode.Tcp) Volatile.Write(ref tcpSnapshot, Array.Empty<TcpPeerInfo>());
+                else if (!running) Volatile.Write(ref investigationSnapshot, null);
                 Interlocked.Exchange(ref droppedEvents, 0);
                 Volatile.Write(ref error, null);
                 // The overview keeps its revision and baseline. Only the log is reset.

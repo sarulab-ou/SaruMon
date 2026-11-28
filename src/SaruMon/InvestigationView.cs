@@ -12,6 +12,7 @@ internal sealed class InvestigationView : UserControl
     private readonly TrafficGraph graph = new() { Dock = DockStyle.Fill, Margin = new Padding(0, 2, 0, 4) };
     private readonly Button start = ActionButton("記録開始（管理者）", accent: true);
     private readonly Button stop = ActionButton("停止");
+    private readonly Button reset = ActionButton("リセット");
     private readonly Button save = ActionButton("調査レポート…");
     private readonly Button csv = ActionButton("全件CSV…");
     private readonly Button back = ActionButton("← 宛先一覧");
@@ -44,7 +45,7 @@ internal sealed class InvestigationView : UserControl
         foreach (var height in new[] { 34, 23, 94, 32 }) layout.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
-        layout.Controls.Add(Strip(start, stop, save, csv), 0, 0);
+        layout.Controls.Add(Strip(start, stop, reset, save, csv), 0, 0);
         layout.Controls.Add(status, 0, 1);
         layout.Controls.Add(graph, 0, 2);
         layout.Controls.Add(Strip([.. groupButtons, Caption("並べ替え　"), .. sortButtons]), 0, 3);
@@ -63,6 +64,7 @@ internal sealed class InvestigationView : UserControl
 
         start.Click += async (_, _) => await StartAsync();
         stop.Click += async (_, _) => await StopAsync();
+        reset.Click += async (_, _) => await ResetRecordingAsync();
         save.Click += (_, _) => ShowReport();
         csv.Click += async (_, _) => await SaveCsvAsync();
         for (var i = 0; i < groupButtons.Length; i++)
@@ -130,12 +132,8 @@ internal sealed class InvestigationView : UserControl
             if (ending) return;
             var now = DateTimeOffset.UtcNow;
             recordedInterface = target;
-            recording = new InvestigationRecord(target.Name, now, now, [], 0, false);
-            lastSnapshot = null;
-            expandedAddress = null;
             notice = null;
-            graph.Reset();
-            RenderTables();
+            ReplaceRecording(new InvestigationRecord(target.Name, now, now, [], 0, false));
             timer.Start();
         }
         catch (Exception ex) when (ex is InvalidOperationException or FormatException or IOException)
@@ -168,6 +166,67 @@ internal sealed class InvestigationView : UserControl
             busy = false;
             if (!ending) ReadRecording();
         }
+    }
+
+    private async Task ResetRecordingAsync()
+    {
+        if (busy || ending || recording is not { } current) return;
+        if (!client.IsRunning)
+        {
+            // Keep an unresolved stop error visible so the stop action can be retried.
+            notice = stop.Enabled ? notice : null;
+            ReplaceRecording(null);
+            RenderStatus();
+            return;
+        }
+
+        var started = DateTimeOffset.UtcNow;
+        busy = true;
+        timer.Stop();
+        notice = "集計をリセットしています…";
+        RenderStatus();
+        try
+        {
+            await client.ResetLogAsync(CancellationToken.None);
+            if (ending) return;
+            notice = null;
+            ReplaceRecording(client.InvestigationSnapshot is null && !client.IsRunning
+                ? null : new InvestigationRecord(current.Interface, started, started, [], 0, false));
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or OperationCanceledException or UnauthorizedAccessException)
+        {
+            if (ending) return;
+            notice = "リセットを確認できませんでした。 " + TrafficMonitorClient.FriendlyError(ex);
+            try { await client.StopAsync(); }
+            catch (InvalidOperationException stopError) { notice += " " + stopError.Message; }
+            if (!ending)
+            {
+                recording = current with { Incomplete = true };
+                lastSnapshot = client.InvestigationSnapshot;
+            }
+            return;
+        }
+        finally
+        {
+            busy = false;
+            if (!ending) RenderStatus();
+        }
+
+        if (ending) return;
+        ReadRecording();
+        if (client.IsRunning && !SameInterface(recordedInterface, selectedInterface))
+            await StopAsync("回線またはローカルIPが変わったため停止しました。");
+        else if (client.IsRunning)
+            timer.Start();
+    }
+
+    private void ReplaceRecording(InvestigationRecord? next)
+    {
+        recording = next;
+        lastSnapshot = null;
+        expandedAddress = null;
+        graph.Reset();
+        RenderTables();
     }
 
     private void ReadRecording()
@@ -209,6 +268,7 @@ internal sealed class InvestigationView : UserControl
         var data = recording;
         start.Enabled = !busy && !client.IsRunning && selectedInterface is { IsUp: true, Addresses.Count: > 0 };
         stop.Enabled = !busy && (client.IsRunning || client.Error?.Contains("停止を再試行", StringComparison.Ordinal) == true);
+        reset.Enabled = !busy && data is not null;
         save.Enabled = csv.Enabled = data is not null && !busy;
         var phase = client.IsRunning ? "記録中" : data is null ? "未記録" : "停止";
         var label = data is null ? phase + " · 回線を選んで記録を開始" :

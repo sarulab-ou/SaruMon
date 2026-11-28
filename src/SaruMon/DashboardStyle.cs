@@ -78,7 +78,9 @@ internal sealed class ResultGrid
         };
     }
 
-    internal ResultRow? Selected => Control.CurrentCell is { RowIndex: var index } && index < rows.Length ? rows[index] : null;
+    internal ResultRow? Selected => Control.CurrentCell is { RowIndex: var index } ? RowAt(index) : null;
+
+    internal ResultRow? RowAt(int index) => index >= 0 && index < rows.Length ? rows[index] : null;
 
     internal void Headers(params string[] names)
     {

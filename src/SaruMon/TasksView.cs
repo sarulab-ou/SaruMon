@@ -31,10 +31,18 @@ internal sealed class TasksView : UserControl
         Dock = DockStyle.Fill;
         BackColor = Canvas;
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(10, 5, 10, 7) };
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 27));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 27));
-        layout.Controls.Add(status, 0, 0);
+        var reset = ActionButton("リセット");
+        reset.Click += async (_, _) =>
+        {
+            ResetBaseline();
+            tasks = tasks.Select(row => row with { Cpu = null }).ToArray();
+            Render();
+            await RefreshTasksAsync();
+        };
+        layout.Controls.Add(Strip(reset, status), 0, 0);
         layout.Controls.Add(grid.Control, 0, 1);
         layout.Controls.Add(path, 0, 2);
         Controls.Add(layout);
@@ -91,6 +99,11 @@ internal sealed class TasksView : UserControl
     private void StopSampling()
     {
         timer.Stop();
+        ResetBaseline();
+    }
+
+    private void ResetBaseline()
+    {
         previousTime = 0;
         previousCpu.Clear();
         revision++;

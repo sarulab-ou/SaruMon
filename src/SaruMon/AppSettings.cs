@@ -9,6 +9,7 @@ internal sealed class AppSettings
     public string? InterfaceId { get; set; }
     public bool UnicastOnlyIndicator { get; set; }
     public bool TcpActivityIndicator { get; set; }
+    public bool ReverseDnsEnabled { get; set; }
 
     public static AppSettings Load()
     {
