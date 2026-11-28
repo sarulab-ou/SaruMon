@@ -58,8 +58,8 @@ internal sealed class TrafficOverview : UserControl
         layout.Controls.Add(Strip(applications, destinations), 0, 2);
 
         var tables = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Margin = Padding.Empty };
-        tables.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 48));
-        tables.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 52));
+        tables.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 44));
+        tables.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 56));
         tables.RowStyles.Add(new RowStyle(SizeType.Absolute, 27));
         tables.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         tables.Controls.Add(listTitle, 0, 0);
@@ -74,8 +74,14 @@ internal sealed class TrafficOverview : UserControl
         destinations.Click += (_, _) => SelectGrouping(true);
         overview.Control.SelectionChanged += (_, _) => { if (!updating) RenderDetails(); };
         details.Control.SelectionChanged += (_, _) => { if (!updating) RenderEndpoint(); };
-        ProcessContextMenu.Attach(overview, value => value is LiveSocket[] group ? group.Select(row => row.Owner) : []);
-        ProcessContextMenu.Attach(details, value => value is LiveSocket row ? [row.Owner] : []);
+        details.Control.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.DisplayedCellsExceptHeaders;
+        details.Control.CellToolTipTextNeeded += (_, e) =>
+        {
+            if (e.RowIndex >= 0 && e.ColumnIndex >= 0)
+                e.ToolTipText = details.Control.Rows[e.RowIndex].Cells[e.ColumnIndex].Value as string;
+        };
+        ProcessContextMenu.Attach(overview, Owners);
+        ProcessContextMenu.Attach(details, Owners);
         refresh.Tick += async (_, _) => await RefreshConnectionsAsync();
         VisibleChanged += async (_, _) =>
         {
@@ -211,7 +217,7 @@ internal sealed class TrafficOverview : UserControl
             if (byDestination)
             {
                 overview.Headers(("宛先IP", 175), ("PID数", 58), ("接続数", 72));
-                details.Headers(("PID / アプリ", 147), ("ポート", 63), ("状態", 89));
+                details.Headers(("PID / アプリ", 120), ("ポート", 77), ("件数", 50), ("状態別の件数", 158));
                 overview.Set(Group(rows.Where(row => !row.IsUdp), row => row.Address)
                     .Select(group => new ResultRow(group.Key, group.ToArray(),
                         [group.Key, group.Select(row => row.ProcessId).OfType<int>().Distinct().Count().ToString(), group.Count().ToString()])).ToArray());
@@ -219,12 +225,13 @@ internal sealed class TrafficOverview : UserControl
             else
             {
                 overview.Headers(("アプリ", 160), ("PID", 60), ("TCP", 50), ("UDP", 50));
-                details.Headers(("IP アドレス", 150), ("種別", 55), ("ポート", 65), ("状態", 80));
+                details.Headers(("IP アドレス", 120), ("ポート", 77), ("件数", 50), ("状態別の件数", 158));
                 overview.Set(Group(rows, row => row.PidLabel)
                     .Select(group => new ResultRow(group.Key, group.ToArray(),
                         [group.First().Application, group.Key, CountRows(group.Count(row => !row.IsUdp), snapshot?.TcpCount),
                             CountRows(group.Count(row => row.IsUdp), snapshot?.UdpCount)])).ToArray());
             }
+            details.Control.Columns[3].DefaultCellStyle.WrapMode = DataGridViewTriState.True;
         }
         finally { updating = false; }
         RenderDetails();
@@ -237,6 +244,9 @@ internal sealed class TrafficOverview : UserControl
     private static IOrderedEnumerable<IGrouping<string, LiveSocket>> Group(IEnumerable<LiveSocket> rows, Func<LiveSocket, string> key) =>
         rows.GroupBy(key, StringComparer.Ordinal).OrderByDescending(group => group.Count()).ThenBy(group => group.Key, StringComparer.Ordinal);
 
+    private static IEnumerable<ProcessTarget> Owners(object value) =>
+        value is LiveSocket[] rows ? rows.Select(row => row.Owner) : [];
+
     private void RenderDetails()
     {
         var rows = overview.Selected?.Value as LiveSocket[] ?? [];
@@ -244,37 +254,56 @@ internal sealed class TrafficOverview : UserControl
         updating = true;
         try
         {
-            details.Set(rows.Select(row => new ResultRow((row.Owner.Identity, row.LocalAddress, row.LocalPort, row.Remote), row,
-                byDestination ? [$"{row.PidLabel} / {row.Application}", row.Port.ToString(), row.Status]
-                    : [row.Address, row.IsUdp ? "UDP" : "TCP", row.Port.ToString(), row.Status])).ToArray());
+            var grouped = byDestination
+                ? Group(rows, row => row.PidLabel).Select(group =>
+                    DetailRow(group.First().Owner.Identity, $"{group.Key} / {group.First().Application}", group.ToArray()))
+                : rows.GroupBy(row => (row.IsUdp, row.Address))
+                    .OrderBy(group => group.Key.IsUdp).ThenByDescending(group => group.Count())
+                    .ThenBy(group => group.Key.Address, StringComparer.Ordinal)
+                    .Select(group => DetailRow(group.Key, group.Key.Address, group.ToArray()));
+            details.Set(grouped.ToArray());
         }
         finally { updating = false; }
         RenderEndpoint();
     }
 
+    private static ResultRow DetailRow(object key, string label, LiveSocket[] rows)
+    {
+        var ports = string.Join(", ", rows.Select(row => row.Port).Distinct().Order());
+        var counts = rows[0].IsUdp
+            ? $"UDP · {rows[0].UdpScope}"
+            : string.Join(Environment.NewLine, rows.GroupBy(row => State(row.TcpState.GetValueOrDefault()))
+                .OrderBy(group => group.Key.Order).Select(group => $"{group.Key.Label} {group.Count():N0}"));
+        return new ResultRow(key, rows, [label, ports, rows.Length.ToString("N0"), counts]);
+    }
+
     private void RenderEndpoint()
     {
-        if (details.Selected?.Value is not LiveSocket row)
+        if (details.Selected is not { Value: LiveSocket[] rows, Cells: var cells })
         {
             endpoint.Text = "UDP の一覧はアプリ別で確認できます。";
             return;
         }
 
-        var local = new IPEndPoint(row.LocalAddress, row.LocalPort);
-        var location = row.Remote is { } remote ? $"TCP · {local} → {remote}" : $"UDP ローカル · {local}（{row.Status}）";
-        endpoint.Text = $"{location} · {row.Application} · PID {row.PidLabel}";
+        var row = rows[0];
+        var scope = row.IsUdp ? "UDP ローカル" : "TCP 宛先";
+        var location = rows.Length == 1 && row.Remote is { } remote
+            ? $"{new IPEndPoint(row.LocalAddress, row.LocalPort)} → {remote}"
+            : $"{row.Address} · ポート {cells[1]}";
+        var counts = row.IsUdp ? row.UdpScope : cells[3].Replace(Environment.NewLine, " / ", StringComparison.Ordinal);
+        endpoint.Text = $"{scope} {location} · {cells[2]} 件 · {counts} · {row.Application} · PID {row.PidLabel}";
     }
 
     internal static string Rate(double? bytesPerSecond) => bytesPerSecond.HasValue ? MainForm.FormatBitRate(bytesPerSecond.Value) : "—";
 
-    private static string State(TcpState state) => state switch
+    private static (int Order, string Label) State(TcpState state) => state switch
     {
-        TcpState.Established => "接続中",
-        TcpState.SynSent or TcpState.SynReceived => "接続処理中",
+        TcpState.Established => (0, "接続中"),
+        TcpState.SynSent or TcpState.SynReceived => (1, "接続処理中"),
         TcpState.CloseWait or TcpState.FinWait1 or TcpState.FinWait2 or TcpState.Closing
-            or TcpState.LastAck or TcpState.TimeWait => "切断処理中",
-        TcpState.Closed or TcpState.DeleteTcb => "切断済み",
-        _ => state.ToString()
+            or TcpState.LastAck or TcpState.TimeWait => (2, "切断処理中"),
+        TcpState.Closed or TcpState.DeleteTcb => (3, "切断済み"),
+        _ => (4, "その他")
     };
 
     protected override void Dispose(bool disposing)
@@ -300,8 +329,7 @@ internal sealed class TrafficOverview : UserControl
                 return (address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address).ToString();
             }
         }
-        internal string Status => TcpState is { } state ? State(state)
-            : LocalAddress.Equals(IPAddress.Any) ? "全 IPv4"
+        internal string UdpScope => LocalAddress.Equals(IPAddress.Any) || LocalAddress.Equals(IPAddress.Any.MapToIPv6()) ? "全 IPv4"
             : LocalAddress.Equals(IPAddress.IPv6Any) ? "全 IPv6"
             : "ローカル";
     }
