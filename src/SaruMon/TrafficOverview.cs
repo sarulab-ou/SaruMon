@@ -75,11 +75,7 @@ internal sealed class TrafficOverview : UserControl
         overview.Control.SelectionChanged += (_, _) => { if (!updating) RenderDetails(); };
         details.Control.SelectionChanged += (_, _) => { if (!updating) RenderEndpoint(); };
         details.Control.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.DisplayedCellsExceptHeaders;
-        details.Control.CellToolTipTextNeeded += (_, e) =>
-        {
-            if (e.RowIndex >= 0 && e.ColumnIndex >= 0)
-                e.ToolTipText = details.Control.Rows[e.RowIndex].Cells[e.ColumnIndex].Value as string;
-        };
+        details.Control.ShowCellToolTips = false;
         ProcessContextMenu.Attach(overview, Owners);
         ProcessContextMenu.Attach(details, Owners);
         refresh.Tick += async (_, _) => await RefreshConnectionsAsync();
