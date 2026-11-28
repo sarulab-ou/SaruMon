@@ -75,8 +75,36 @@ internal static class TcpConnectionTests
         Assert(snapshot.SequenceEqual(original), "filter does not mutate its input");
         Assert(TcpConnections.Filter([established], [local4, local4]).Count == 1, "duplicate selected addresses do not duplicate rows");
         LoopbackConnectionAppearsInOsTable();
-        count++;
+        OwnerAppearsInOsTable(IPAddress.Loopback);
+        count += 2;
+        if (Socket.OSSupportsIPv6)
+        {
+            OwnerAppearsInOsTable(IPAddress.IPv6Loopback);
+            count++;
+        }
         return count;
+    }
+
+    private static void OwnerAppearsInOsTable(IPAddress address)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var listener = new TcpListener(address, 0);
+        using var client = new TcpClient(address.AddressFamily);
+        listener.Start();
+        var serverPort = ((IPEndPoint)listener.LocalEndpoint).Port;
+        client.ConnectAsync(address, serverPort, timeout.Token).AsTask().GetAwaiter().GetResult();
+        using var server = listener.AcceptTcpClientAsync(timeout.Token).AsTask().GetAwaiter().GetResult();
+        var clientPort = ((IPEndPoint)client.Client.LocalEndPoint!).Port;
+        var wait = Stopwatch.StartNew();
+        while (wait.Elapsed < TimeSpan.FromSeconds(2))
+        {
+            if (TcpConnections.ReadWithOwners([address]).Any(row => row.LocalAddress.Equals(address) && row.LocalPort == clientPort
+                && row.RemoteAddress.Equals(address) && row.RemotePort == serverPort && row.State == TcpState.Established
+                && row.ProcessId == Environment.ProcessId))
+                return;
+            Thread.Sleep(25);
+        }
+        throw new InvalidOperationException($"The OS table did not associate the {address.AddressFamily} connection with its owning PID.");
     }
 
     private static void LoopbackConnectionAppearsInOsTable()

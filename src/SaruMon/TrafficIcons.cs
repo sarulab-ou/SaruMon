@@ -64,15 +64,6 @@ internal sealed class TrafficIcons : IDisposable
         return 1 + (int)(fraction * (interiorSize - 1));
     }
 
-    public static Color ColorFor(TrafficState state) => state switch
-    {
-        TrafficState.Receiving => ReceiveColor,
-        TrafficState.Sending => SendColor,
-        TrafficState.Both => Color.FromArgb(72, 85, 104),
-        TrafficState.Offline => Color.FromArgb(204, 122, 32),
-        _ => Color.FromArgb(112, 123, 139)
-    };
-
     private Icon Create(int receive, int send, bool offline)
     {
         using var bitmap = new Bitmap(size, size);

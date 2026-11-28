@@ -55,8 +55,8 @@ dotnet run --project tests/SaruMon.Tests/SaruMon.Tests.csproj --configuration Re
 | `artifacts/publish/win-x64/SaruMon.exe` | 配布用の単一 EXE |
 | `artifacts/SaruMon-win-x64.zip` | ポータブル版・アプリ内更新用 |
 | `artifacts/SaruMon-win-x64.zip.sha256` | アプリ内更新で照合するハッシュ |
-| `artifacts/SaruMon-0.1.18-Setup-x64.exe` | v0.1.18 インストーラー |
-| `artifacts/SaruMon-0.1.18-SHA256SUMS.txt` | v0.1.18 インストーラーの SHA-256 |
+| `artifacts/SaruMon-0.1.19-Setup-x64.exe` | v0.1.19 インストーラー |
+| `artifacts/SaruMon-0.1.19-SHA256SUMS.txt` | v0.1.19 インストーラーの SHA-256 |
 
 ビルド成果物は Git に追加しません。公開手順は [releasing.md](releasing.md) を参照してください。
 
@@ -67,7 +67,7 @@ dotnet run --project tests/SaruMon.Tests/SaruMon.Tests.csproj --configuration Re
 「Windows ログイン時に起動」コンポーネントは既定で選択され、現在のユーザーのログイン時にインストール先の `SaruMon.exe --tray` を実行するよう登録します。対話形式ではチェックを外せます。サイレントインストールで登録を無効にする場合は `/NoStartup` を指定します。
 
 ```powershell
-Start-Process -FilePath '.\artifacts\SaruMon-0.1.18-Setup-x64.exe' -ArgumentList '/S', '/NoStartup' -WindowStyle Hidden -Wait
+Start-Process -FilePath '.\artifacts\SaruMon-0.1.19-Setup-x64.exe' -ArgumentList '/S', '/NoStartup' -WindowStyle Hidden -Wait
 ```
 
 ZIP 版はアプリ内で自動起動を有効にします。インストーラーの自動起動登録は、Windows の通知領域でアイコンを常時表示する設定を変更しません。表示位置は起動後に利用者が調整します。
@@ -80,7 +80,7 @@ ZIP 版はアプリ内で自動起動を有効にします。インストーラ�
 
 「TCP通信の目安で棒を表示」は既定でオフです。オンで回線を利用できる間は、既存タイマーで OS の TCP 統計を利用可能なアドレスファミリーごとに取得します。`TcpIndicatorSampler` が IPv4 / IPv6 の送受信セグメント数と再送数の差分を計算し、同じ方向のインタフェース側の増加と組み合わせて棒を出す方向を判定します。棒の高さには同方向のインタフェース全体の値を使います。切断・設定変更・統計の欠測の後は基準値を取り直します。双方のカウンターが同時に増えることを使った推定なので、TCP が実際に通ったインタフェースを特定するものではありません。
 
-「TCP通信だけを表示（管理者権限）」では、相手別の TCP 観測と同じ補助プロセスから全体集計を受け取ります。観測に選択中のローカル IP を使い、ループバックとこの PC の IP 宛ての通信を全体集計から除きます。全体集計は相手別一覧の保持上限と独立しています。`TcpTrafficMeter` は選択ごとの単調時計と累積バイト数から速度を計算します。毎秒届く観測値を次の観測まで再利用してグラフを表示します。
+「通知領域をTCP通信だけにする（管理者権限）」では、補助プロセスからTCPの全体集計を受け取ります。観測に選択中のローカル IP を使い、ループバックとこの PC の IP 宛ての通信を全体集計から除きます。`TcpTrafficMeter` は選択ごとの単調時計と累積バイト数から速度を計算し、通知領域の棒とツールチップに使います。
 
 `AppSettings.UnicastOnlyIndicator` は既定で `false` です。ウィンドウ下部のチェックボックスと通知領域の右クリックメニューで同期して切り替えます。オフでは送受信バイト数の差分、オンではユニキャスト送受信パケット数の差分が正かどうかを方向ごとに判定します。設定の切り替えは表示対象だけを変え、速度・合計・グラフの値や集計開始点は変えません。ユニキャストのカウンターを取得できない場合は判定できないことを表示し、全体の通信量で代用しません。
 
@@ -93,6 +93,8 @@ ZIP 版はアプリ内で自動起動を有効にします。インストーラ�
 ## 現在の表示と通信監視
 
 メイン画面には「通信量」と「調査」のタブがあります。アダプターの説明とIPアドレスは「監視するインタフェース」と同じ行に表示します。TCP専用表示は `TcpPeerView` が持つ監視処理を使い、一覧の更新と逆引きはビューの表示時だけ実行されます。アプリ・宛先別の表示と保存は「調査」タブが担当します。
+
+「通信量」と「調査」は白基調の `DashboardStyle` と5分のグラフを共有します。「通信量」は常に回線全体のカウンターを使い、タブ表示中にTCP接続表から宛先・ポート・状態・PIDを通常権限で取得します。接続表の更新は2秒間隔で、回線が切り替わった後に届いた旧回線の結果は破棄します。
 
 ## v0.1.17までのTCP接続先と逆引き
 

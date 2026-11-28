@@ -1,18 +1,15 @@
 using System.Net;
 using SaruMon.Core;
 using SaruMon.Monitoring;
+using static SaruMon.DashboardStyle;
 
 namespace SaruMon;
 
 internal sealed class InvestigationView : UserControl
 {
-    private static readonly Color Navy = Color.FromArgb(12, 24, 41);
-    private static readonly Color Surface = Color.FromArgb(20, 34, 54);
-    private static readonly Color Ink = Color.FromArgb(227, 237, 248);
-    private static readonly Color Muted = Color.FromArgb(178, 197, 220);
     private readonly TrafficMonitorClient client = new(MonitoringMode.Investigation);
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 1000 };
-    private readonly TrafficGraph graph = new(300, dark: true) { Dock = DockStyle.Fill, Margin = new Padding(0, 2, 0, 4) };
+    private readonly TrafficGraph graph = new() { Dock = DockStyle.Fill, Margin = new Padding(0, 2, 0, 4) };
     private readonly Button start = ActionButton("記録開始（管理者）", accent: true);
     private readonly Button stop = ActionButton("停止");
     private readonly Button demoButton = ActionButton("デモ");
@@ -44,7 +41,7 @@ internal sealed class InvestigationView : UserControl
     internal InvestigationView()
     {
         Dock = DockStyle.Fill;
-        BackColor = Navy;
+        BackColor = Canvas;
         ForeColor = Ink;
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Padding = new Padding(10, 5, 10, 7) };
         foreach (var height in new[] { 34, 23, 94, 32 }) layout.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
@@ -218,7 +215,7 @@ internal sealed class InvestigationView : UserControl
             $"{phase} · {data.Interface} · {data.Rows.Count:N0} 行 · 発生元未確認 {data.Rows.Count(row => row.Path is null):N0} 行";
         if (data?.Incomplete == true) label += $" · 部分記録（未記録イベント {data.DroppedEvents:N0}）";
         status.Text = demo is null && notice is not null ? label + " · " + notice : label;
-        status.ForeColor = data?.Incomplete == true || notice is not null && demo is null ? Color.FromArgb(255, 201, 126) : Muted;
+        status.ForeColor = data?.Incomplete == true || notice is not null && demo is null ? Warning : Muted;
     }
 
     private void RenderTables()
@@ -246,8 +243,8 @@ internal sealed class InvestigationView : UserControl
 
     private void RenderChoices()
     {
-        for (var i = 0; i < groupButtons.Length; i++) groupButtons[i].BackColor = i == grouping ? Color.FromArgb(37, 72, 112) : Surface;
-        for (var i = 0; i < sortButtons.Length; i++) sortButtons[i].BackColor = i == order ? Color.FromArgb(37, 72, 112) : Surface;
+        for (var i = 0; i < groupButtons.Length; i++) groupButtons[i].BackColor = i == grouping ? Selected : Surface;
+        for (var i = 0; i < sortButtons.Length; i++) sortButtons[i].BackColor = i == order ? Selected : Surface;
     }
 
     private void RenderBreakdown()
@@ -463,37 +460,6 @@ internal sealed class InvestigationView : UserControl
         && new HashSet<string>(left.Addresses, StringComparer.OrdinalIgnoreCase).SetEquals(right.Addresses);
 
     private static string DisplayTime(DateTimeOffset time) => time.ToLocalTime().ToString("MM/dd HH:mm:ss");
-    private static Label Caption(string text = "") => new() { Text = text, AutoSize = false, Dock = DockStyle.Fill,
-        AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft, ForeColor = Muted, Margin = Padding.Empty, BackColor = Color.Transparent };
-
-    private static FlowLayoutPanel Strip(params Control[] children)
-    {
-        var row = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty };
-        foreach (var control in children)
-        {
-            if (control is Label label)
-            {
-                label.AutoSize = true;
-                label.Dock = DockStyle.None;
-                label.Margin = new Padding(2, 6, 0, 0);
-            }
-            row.Controls.Add(control);
-        }
-        return row;
-    }
-
-    private static Button ActionButton(string text, bool accent = false)
-    {
-        var button = new Button
-        {
-            Text = text, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Height = 27, MinimumSize = new Size(0, 25),
-            BackColor = accent ? Color.FromArgb(33, 84, 145) : Surface, ForeColor = Ink,
-            FlatStyle = FlatStyle.Flat, Margin = new Padding(0, 0, 6, 1), Padding = new Padding(5, 0, 5, 0)
-        };
-        button.FlatAppearance.BorderColor = Color.FromArgb(62, 81, 110);
-        return button;
-    }
-
     private static ComboBox Selector(string label, params string[] values)
     {
         var box = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, AccessibleName = label, Width = values[0].Length < 5 ? 100 : 156,
@@ -503,73 +469,4 @@ internal sealed class InvestigationView : UserControl
         return box;
     }
 
-    private sealed record ResultRow(object Key, object Value, string[] Cells);
-
-    private sealed class ResultGrid
-    {
-        private ResultRow[] rows = [];
-        internal DataGridView Control { get; } = new()
-        {
-            Dock = DockStyle.Fill, VirtualMode = true, ReadOnly = true, BackgroundColor = Surface,
-            BorderStyle = BorderStyle.None, GridColor = Color.FromArgb(39, 56, 81), EnableHeadersVisualStyles = false,
-            AllowUserToAddRows = false, AllowUserToDeleteRows = false, AllowUserToResizeRows = false,
-            SelectionMode = DataGridViewSelectionMode.FullRowSelect, MultiSelect = false, RowHeadersVisible = false,
-            ColumnHeadersHeight = 27, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None,
-            ColumnHeadersBorderStyle = DataGridViewHeaderBorderStyle.None,
-            Margin = new Padding(0, 0, 6, 1), CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal
-        };
-
-        internal ResultGrid(string name, params (string Title, int Width)[] columns)
-        {
-            Control.AccessibleName = name;
-            Control.DefaultCellStyle = new DataGridViewCellStyle { BackColor = Surface, ForeColor = Ink,
-                SelectionBackColor = Color.FromArgb(37, 72, 112), SelectionForeColor = Color.White };
-            Control.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(24, 39, 62);
-            Control.ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle { BackColor = Color.FromArgb(30, 48, 73), ForeColor = Ink,
-                SelectionBackColor = Color.FromArgb(30, 48, 73), SelectionForeColor = Ink };
-            foreach (var (title, width) in columns) AddColumn(title, width);
-            Control.CellValueNeeded += (_, e) =>
-            {
-                if (e.RowIndex < rows.Length && e.ColumnIndex < rows[e.RowIndex].Cells.Length)
-                    e.Value = rows[e.RowIndex].Cells[e.ColumnIndex];
-            };
-        }
-
-        internal ResultRow? Selected => Control.CurrentCell is { RowIndex: var index } && index < rows.Length ? rows[index] : null;
-
-        internal void Headers(params string[] names)
-        {
-            if (Control.Columns.Count == names.Length && names.Select((name, index) => Control.Columns[index].HeaderText == name).All(same => same)) return;
-            Control.RowCount = 0;
-            Control.Columns.Clear();
-            var dimensions = names.Length == 4 ? new[] { 120, 66, 66, 91 } : new[] { 121, 60, 53, 64, 64 };
-            for (var i = 0; i < names.Length; i++) AddColumn(names[i], dimensions[i]);
-            Control.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
-        }
-
-        private void AddColumn(string title, int width) =>
-            Control.Columns.Add(new DataGridViewTextBoxColumn
-            {
-                HeaderText = title, Width = width, FillWeight = width, MinimumWidth = Math.Min(width, 48),
-                SortMode = DataGridViewColumnSortMode.NotSortable
-            });
-
-        internal void Set(ResultRow[] updated)
-        {
-            var key = Selected?.Key;
-            var scroll = Control.FirstDisplayedScrollingRowIndex;
-            var scrollKey = scroll >= 0 && scroll < rows.Length ? rows[scroll].Key : null;
-            rows = updated;
-            Control.RowCount = rows.Length;
-            if (rows.Length > 0)
-            {
-                var index = Array.FindIndex(rows, row => Equals(row.Key, key));
-                if (index < 0) index = 0;
-                if (Control.CurrentCell?.RowIndex != index) Control.CurrentCell = Control.Rows[index].Cells[0];
-                var anchor = Array.FindIndex(rows, row => Equals(row.Key, scrollKey));
-                if (anchor >= 0 && anchor != Control.FirstDisplayedScrollingRowIndex) Control.FirstDisplayedScrollingRowIndex = anchor;
-            }
-            Control.Invalidate();
-        }
-    }
 }

@@ -24,12 +24,8 @@ internal sealed class MainForm : Form
     private readonly ComboBox adapter = new() { DropDownStyle = ComboBoxStyle.DropDownList, MaxDropDownItems = 12, Dock = DockStyle.Fill, AccessibleName = "監視するインタフェース" };
     private readonly Label adapterDetail = new() { Dock = DockStyle.Fill, AutoEllipsis = true,
         TextAlign = ContentAlignment.MiddleLeft, ForeColor = Color.FromArgb(104, 116, 134) };
-    private readonly Label receiveRate = RateLabel();
-    private readonly Label sendRate = RateLabel();
-    private readonly Label receiveTotal = DetailLabel();
-    private readonly Label sendTotal = DetailLabel();
     private readonly Label footer = DetailLabel();
-    private readonly TrafficGraph graph = new() { Dock = DockStyle.Fill, Margin = new Padding(0, 16, 0, 0) };
+    private readonly TrafficOverview overview = new();
     // Reuse the existing TCP monitor lifecycle without opening its log view.
     private readonly TcpPeerView tcpMonitor = new() { Visible = false };
     private readonly InvestigationView investigation = new();
@@ -38,13 +34,11 @@ internal sealed class MainForm : Form
     private readonly ToolStripMenuItem unicastOnlyMenu = new("ユニキャスト通信だけで棒を表示") { CheckOnClick = true };
     private readonly CheckBox tcpIndicator = new() { Text = "TCP通信の目安で棒を表示", AutoSize = true };
     private readonly ToolStripMenuItem tcpIndicatorMenu = new("TCP通信の目安で棒を表示") { CheckOnClick = true };
-    private readonly CheckBox tcpOnly = new() { Text = "TCP通信だけを表示（管理者権限）", AutoSize = true, Anchor = AnchorStyles.Left };
-    private readonly ToolStripMenuItem tcpOnlyMenu = new("TCP通信だけを表示（管理者権限）");
+    private readonly ToolStripMenuItem tcpOnlyMenu = new("通知領域をTCP通信だけにする（管理者権限）");
     private readonly bool startHidden;
     private TrafficSample? latestSample;
     private TcpActivity? latestTcpActivity;
     private TcpTrafficDisplay? tcpTraffic;
-    private long? displayedTcpRevision;
     private bool tcpOnlyMode;
     private bool changingTcpMode;
     private bool refreshing;
@@ -104,26 +98,10 @@ internal sealed class MainForm : Form
         choose.Controls.Add(refresh, 1, 0);
         body.Controls.Add(choose, 0, 1);
 
-        var rates = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
-        rates.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        rates.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        rates.Controls.Add(CreateRateCard("↓ 受信", TrafficIcons.ReceiveColor, receiveRate, receiveTotal, new Padding(0, 0, 7, 0)), 0, 0);
-        rates.Controls.Add(CreateRateCard("↑ 送信", TrafficIcons.SendColor, sendRate, sendTotal, new Padding(7, 0, 0, 0)), 1, 0);
         var tabs = new TabControl { Dock = DockStyle.Fill, Margin = Padding.Empty };
-        var trafficPage = new TabPage("通信量") { BackColor = BackColor };
-        var investigationPage = new TabPage("調査");
-        var trafficLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(6), Margin = Padding.Empty };
-        trafficLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 112));
-        trafficLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        trafficLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-        trafficLayout.Controls.Add(rates, 0, 0);
-        trafficLayout.Controls.Add(graph, 0, 1);
-        var legend = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty, Padding = new Padding(0, 5, 0, 0) };
-        foreach (var (state, text) in new[] { (TrafficState.Receiving, "↓ 受信"), (TrafficState.Sending, "↑ 送信"), (TrafficState.Idle, "□ 通信なし"), (TrafficState.Offline, "× 未接続") })
-            legend.Controls.Add(new Label { Text = text, AutoSize = true, ForeColor = TrafficIcons.ColorFor(state), Margin = new Padding(0, 0, 18, 0) });
-        tips.SetToolTip(legend, "アイコンの左は受信（緑、上から下）、右は送信（赤、下から上）です。棒の高さは1秒ごとの通信量に応じて変わります。");
-        trafficLayout.Controls.Add(legend, 0, 2);
-        trafficPage.Controls.Add(trafficLayout);
+        var trafficPage = new TabPage("通信量") { BackColor = DashboardStyle.Canvas };
+        var investigationPage = new TabPage("調査") { BackColor = DashboardStyle.Canvas };
+        trafficPage.Controls.Add(overview);
         investigationPage.Controls.Add(investigation);
         tabs.TabPages.AddRange([trafficPage, investigationPage]);
         tabs.SelectedIndexChanged += (_, _) =>
@@ -162,8 +140,7 @@ internal sealed class MainForm : Form
         hide.Click += (_, _) => HideToTray();
         var mainOptions = new FlowLayoutPanel { Dock = DockStyle.Fill, Margin = Padding.Empty, WrapContents = false };
         startup.Margin = new Padding(3, 7, 15, 0);
-        tcpOnly.Margin = new Padding(3, 7, 3, 0);
-        mainOptions.Controls.AddRange([startup, tcpOnly]);
+        mainOptions.Controls.Add(startup);
         options.Controls.Add(mainOptions, 0, 0);
         options.Controls.Add(hide, 1, 0);
         unicastOnly.Checked = settings.UnicastOnlyIndicator;
@@ -176,7 +153,6 @@ internal sealed class MainForm : Form
         indicatorOptions.Controls.AddRange([unicastOnly, tcpIndicator]);
         options.Controls.Add(indicatorOptions, 0, 1);
         options.SetColumnSpan(indicatorOptions, 2);
-        tips.SetToolTip(tcpOnly, "選択したインタフェースのローカルIPでTCPを観測し、速度・合計・グラフ・通知領域の棒に表示します。\nこのPC内で完結する通信は表示から除きます。");
         body.Controls.Add(options, 0, 3);
         footer.Text = "1秒ごとに更新 · × を押しても監視を続けます";
         footer.Dock = DockStyle.Fill;
@@ -208,7 +184,6 @@ internal sealed class MainForm : Form
         unicastOnlyMenu.CheckedChanged += (_, _) => SetUnicastOnlyIndicator(unicastOnlyMenu.Checked);
         tcpIndicator.CheckedChanged += (_, _) => SetTcpActivityIndicator(tcpIndicator.Checked);
         tcpIndicatorMenu.CheckedChanged += (_, _) => SetTcpActivityIndicator(tcpIndicatorMenu.Checked);
-        tcpOnly.CheckedChanged += async (_, _) => await SetTcpOnlyModeAsync(tcpOnly.Checked);
         tcpOnlyMenu.Click += async (_, _) => await SetTcpOnlyModeAsync(!tcpOnlyMode);
         adapter.SelectedIndexChanged += (_, _) => SelectAdapter();
         RefreshAdapters();
@@ -259,7 +234,7 @@ internal sealed class MainForm : Form
         if (adapter.SelectedItem is not AdapterChoice selected) return;
         settings.InterfaceId = selected.Id;
         sampler.Reset();
-        graph.Reset();
+        overview.ResetGraph();
         UpdateAdapterDetail();
         try { settings.Save(); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -273,6 +248,7 @@ internal sealed class MainForm : Form
     {
         var choice = adapter.SelectedItem as AdapterChoice;
         var item = choice?.Interface;
+        overview.SetInterface(item);
         tcpMonitor.SetInterface(item);
         investigation.SetInterface(item);
         adapterDetail.Text = item is not null
@@ -293,7 +269,8 @@ internal sealed class MainForm : Form
             latestTcpActivity = tcpIndicatorSampler.Read(sample.HasRate);
         else if (latestTcpActivity.HasValue)
             ResetTcpIndicator();
-        RenderTraffic(addGraphSample: true);
+        overview.SetSample(latestSample, addGraphSample: true);
+        RenderIndicator();
     }
 
     private void UpdateCpuIndicator()
@@ -305,38 +282,17 @@ internal sealed class MainForm : Form
         if (cpuTray.Text != tooltip) cpuTray.Text = tooltip;
     }
 
-    private void RenderTraffic(bool addGraphSample)
-    {
-        var traffic = tcpOnlyMode && latestSample?.IsAvailable == true ? tcpTraffic : null;
-        if (traffic is not null && displayedTcpRevision != traffic.Revision)
-        {
-            displayedTcpRevision = traffic.Revision;
-            graph.Reset();
-        }
-        var down = tcpOnlyMode ? traffic?.DownloadBytesPerSecond : latestSample?.HasRate == true ? latestSample.DownloadBytesPerSecond : null;
-        var up = tcpOnlyMode ? traffic?.UploadBytesPerSecond : latestSample?.HasRate == true ? latestSample.UploadBytesPerSecond : null;
-        receiveRate.Text = down.HasValue ? FormatBitRate(down.Value) : "—";
-        sendRate.Text = up.HasValue ? FormatBitRate(up.Value) : "—";
-        receiveTotal.Text = tcpOnlyMode ? "TCP 観測後の合計  " + (traffic is null ? "—" : FormatBytes(traffic.ReceivedBytes))
-            : "選択後の合計  " + FormatBytes(latestSample?.TotalReceivedBytes ?? 0);
-        sendTotal.Text = tcpOnlyMode ? "TCP 観測後の合計  " + (traffic is null ? "—" : FormatBytes(traffic.SentBytes))
-            : "選択後の合計  " + FormatBytes(latestSample?.TotalSentBytes ?? 0);
-        if (addGraphSample) graph.Add(down ?? 0, up ?? 0);
-        RenderIndicator();
-    }
-
     private async Task SetTcpOnlyModeAsync(bool enabled)
     {
         if (changingTcpMode || shuttingDown || enabled == tcpOnlyMode) return;
         changingTcpMode = true;
         tcpOnlyMode = enabled;
-        tcpOnly.Checked = tcpOnlyMenu.Checked = enabled;
-        tcpOnly.Enabled = tcpOnlyMenu.Enabled = false;
+        tcpOnlyMenu.Checked = enabled;
+        tcpOnlyMenu.Enabled = false;
         unicastOnly.Enabled = unicastOnlyMenu.Enabled = tcpIndicator.Enabled = tcpIndicatorMenu.Enabled = !enabled;
         ResetTcpIndicator();
-        displayedTcpRevision = null;
-        graph.Reset();
-        RenderTraffic(addGraphSample: false);
+        tcpTraffic = tcpTrafficMeter.Read(null);
+        RenderIndicator();
         try
         {
             if (enabled) await tcpMonitor.StartForTrafficDisplayAsync();
@@ -347,10 +303,10 @@ internal sealed class MainForm : Form
             changingTcpMode = false;
             if (!IsDisposed && !shuttingDown)
             {
-                tcpOnly.Enabled = tcpOnlyMenu.Enabled = true;
+                tcpOnlyMenu.Enabled = true;
                 var error = tcpMonitor.MonitorError;
                 if (error is not null) footer.Text = error;
-                RenderTraffic(addGraphSample: false);
+                RenderIndicator();
             }
         }
     }
@@ -423,8 +379,8 @@ internal sealed class MainForm : Form
             else if (tcpTraffic.Incomplete) status += "（一部未計測）";
         }
         var mode = tcpOnlyMode ? "TCP観測" : useTcp ? (onlyUnicast ? "TCP目安・ユニキャスト" : "TCP目安") : (onlyUnicast ? "ユニキャスト" : "全通信");
-        var download = tcpOnlyMode ? tcpTraffic?.DownloadBytesPerSecond : sample?.DownloadBytesPerSecond;
-        var upload = tcpOnlyMode ? tcpTraffic?.UploadBytesPerSecond : sample?.UploadBytesPerSecond;
+        var download = tcpOnlyMode ? tcpTraffic?.DownloadBytesPerSecond : sample?.HasRate == true ? sample.DownloadBytesPerSecond : null;
+        var upload = tcpOnlyMode ? tcpTraffic?.UploadBytesPerSecond : sample?.HasRate == true ? sample.UploadBytesPerSecond : null;
         var trafficIcon = icons.GetIcon(sample?.IsAvailable == true, receiving ? download.GetValueOrDefault() : 0,
             sending ? upload.GetValueOrDefault() : 0);
         // Icons are cached. Avoid repeated shell/window notifications while the state is unchanged.
@@ -434,7 +390,7 @@ internal sealed class MainForm : Form
         const int tooltipLimit = 63;
         const string namedTitle = "SaruMon · ";
         var scope = tcpOnlyMode ? "TCP" : "全体";
-        var rates = $"{scope} ↓ {receiveRate.Text} ↑ {sendRate.Text}";
+        var rates = $"{scope} ↓ {TrafficOverview.Rate(download)} ↑ {TrafficOverview.Rate(upload)}";
         var details = $"{rates}\n棒: {mode} · {status}";
         var nameBudget = Math.Min(10, tooltipLimit - namedTitle.Length - details.Length - 1);
         var title = nameBudget < 1 ? "SaruMon" : namedTitle + (name.Length <= nameBudget ? name : name[..(nameBudget - 1)] + "…");
@@ -471,7 +427,7 @@ internal sealed class MainForm : Form
         "SaruMon アイコンを常に表示する", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
     private void ShowHelp() => MessageBox.Show(this,
-        "1. 監視するインタフェースを選択します。\n2. 通知領域に格納すると、白地の棒グラフで通信量を確認できます。\n\n左の緑は受信で、上から下へ伸びます。右の赤は送信で、下から上へ伸びます。\n1秒ごとに、通信量に応じて1ピクセル刻みで伸びます。約8.2 kbps以下の通信は1ピクセル、約134.2 Mbps以上は最大の高さです。\n通信がない方向の棒は消え、未接続はオレンジの × です。\n「ユニキャスト通信だけで棒を表示」をオンにすると、ユニキャスト通信があった方向だけ棒を表示します。高さはその方向の全通信量です。\n管理者権限は不要で、TCP・UDPとLAN内の個別通信を含みます。設定は次回起動時も引き継ぎます。\n「TCP通信の目安で棒を表示」では、選択した回線とPC全体のTCPで同じ区間に通信が増えた方向を表示します。高さはその方向の全通信量です。\nPC内や別回線のTCPが選択回線のUDPと重なると点灯する場合があります。管理者権限は不要です。\n「TCP通信だけを表示（管理者権限）」をオンにすると、選択したインタフェースのローカルIPに対応するTCPの棒・速度・合計・グラフを表示します。\nPC内で完結する通信は除きます。TCP観測は起動時にオフです。\n通常時と目安モードの速度・合計・グラフはインタフェース全体の値です。\n速度はビット毎秒（bps、kbps、Mbpsなど）で表示します。合計の単位はバイトです。\n合計は現在のインタフェースを選択してからの通信量です。\n\n「調査」タブの「記録開始（管理者）」でTCP・UDP通信を記録します。\n「アプリ別」または「宛先別」でまとめ、同じIPへの通信の内訳を確認できます。\n上りはTCPとUDPの合計、下りはTCPの観測量です。\n停止後も「調査レポート…」でMarkdown、「全件CSV…」で集計を保存できます。「デモ」は架空データです。\n\nアイコンが隠れている場合は、タスクバー右端の ∧ を開き、SaruMon を時計の近くへドラッグしてください。\nアイコンのクリック、または SaruMon の再起動で画面が開きます。\n終了するには、メニューの「終了」を選びます。\n\n更新は「ヘルプ → 更新を確認」から実行できます。",
+        "1. 監視するインタフェースを選択します。\n2. 通知領域に格納すると、白地の棒グラフで通信量を確認できます。\n\n左の緑は受信で、上から下へ伸びます。右の赤は送信で、下から上へ伸びます。\n1秒ごとに、通信量に応じて1ピクセル刻みで伸びます。約8.2 kbps以下の通信は1ピクセル、約134.2 Mbps以上は最大の高さです。\n通信がない方向の棒は消え、未接続はオレンジの × です。\n「ユニキャスト通信だけで棒を表示」をオンにすると、ユニキャスト通信があった方向だけ棒を表示します。高さはその方向の全通信量です。\n管理者権限は不要で、TCP・UDPとLAN内の個別通信を含みます。設定は次回起動時も引き継ぎます。\n「TCP通信の目安で棒を表示」では、選択した回線とPC全体のTCPで同じ区間に通信が増えた方向を表示します。高さはその方向の全通信量です。\nPC内や別回線のTCPが選択回線のUDPと重なると点灯する場合があります。管理者権限は不要です。\n通知領域メニューの「通知領域をTCP通信だけにする（管理者権限）」をオンにすると、選択インタフェースのTCPの棒と速度を通知領域に表示します。\nPC内で完結する通信は除きます。TCP観測は起動時にオフです。\n「通信量」タブには、回線全体の速度・合計・直近5分のグラフと、現在のTCP接続を表示します。アプリ別・宛先別の一覧は通常権限で取得します。\n速度はビット毎秒（bps、kbps、Mbpsなど）で表示します。合計の単位はバイトです。\n合計は現在のインタフェースを選択してからの通信量です。\n\n「調査」タブの「記録開始（管理者）」でTCP・UDP通信を記録します。\n「アプリ別」または「宛先別」でまとめ、同じIPへの通信の内訳を確認できます。\n上りはTCPとUDPの合計、下りはTCPの観測量です。\n停止後も「調査レポート…」でMarkdown、「全件CSV…」で集計を保存できます。「デモ」は架空データです。\n\nアイコンが隠れている場合は、タスクバー右端の ∧ を開き、SaruMon を時計の近くへドラッグしてください。\nアイコンのクリック、または SaruMon の再起動で画面が開きます。\n終了するには、メニューの「終了」を選びます。\n\n更新は「ヘルプ → 更新を確認」から実行できます。",
         "SaruMon の使い方", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
     public async void RequestExit()
@@ -548,20 +504,7 @@ internal sealed class MainForm : Form
         return bytes.ToString(format, System.Globalization.CultureInfo.CurrentCulture) + (compact ? "" : " ") + ByteUnits[unit];
     }
 
-    private static Label RateLabel() => new() { AutoSize = true, Font = new Font("Yu Gothic UI", 25, FontStyle.Bold), Text = "—", Margin = Padding.Empty };
     private static Label DetailLabel() => new() { AutoSize = true, ForeColor = Color.FromArgb(104, 116, 134), Font = new Font("Yu Gothic UI", 9), Margin = Padding.Empty };
-    private static Control CreateRateCard(string title, Color color, Label rate, Label total, Padding margin)
-    {
-        var panel = new TableLayoutPanel { Dock = DockStyle.Fill, BackColor = Color.White, Padding = new Padding(15, 7, 15, 7), RowCount = 3, Margin = margin };
-        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
-        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 23));
-        panel.Controls.Add(new Label { Text = title, AutoSize = true, ForeColor = color, Margin = Padding.Empty }, 0, 0);
-        rate.ForeColor = color;
-        panel.Controls.Add(rate, 0, 1);
-        panel.Controls.Add(total, 0, 2);
-        return panel;
-    }
 
     private sealed record AdapterChoice(string Id, string Display, TrafficInterface? Interface)
     {

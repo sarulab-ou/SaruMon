@@ -4,23 +4,20 @@ namespace SaruMon;
 
 internal sealed class TrafficGraph : Control
 {
-    private readonly int historySeconds;
-    private readonly bool dark;
+    private const int HistorySeconds = 300;
     private readonly Queue<(double Down, double Up)> samples = new();
-    public TrafficGraph(int historySeconds = 60, bool dark = false)
+    public TrafficGraph()
     {
-        this.historySeconds = historySeconds;
-        this.dark = dark;
         DoubleBuffered = true;
-        BackColor = dark ? Color.FromArgb(20, 34, 54) : Color.White;
-        ForeColor = dark ? Color.FromArgb(205, 219, 238) : Color.FromArgb(102, 116, 134);
-        AccessibleName = $"直近{historySeconds}秒の通信速度グラフ";
+        BackColor = DashboardStyle.Surface;
+        ForeColor = DashboardStyle.Muted;
+        AccessibleName = "直近5分の通信速度グラフ";
     }
 
     public void Add(double down, double up)
     {
         samples.Enqueue((down, up));
-        while (samples.Count > historySeconds + 1) samples.Dequeue();
+        while (samples.Count > HistorySeconds + 1) samples.Dequeue();
         Invalidate();
     }
 
@@ -33,24 +30,24 @@ internal sealed class TrafficGraph : Control
         g.SmoothingMode = SmoothingMode.AntiAlias;
         var area = new RectangleF(12, 30, Math.Max(1, Width - 24), Math.Max(1, Height - 56));
         var ceiling = Math.Max(1024, samples.Count == 0 ? 0 : samples.Max(x => Math.Max(x.Down, x.Up)) * 1.15);
-        using var grid = new Pen(dark ? Color.FromArgb(48, 65, 88) : Color.FromArgb(231, 236, 242));
+        using var grid = new Pen(DashboardStyle.Border);
         for (var i = 0; i < 4; i++)
         {
             var y = area.Top + area.Height * i / 3;
             g.DrawLine(grid, area.Left, y, area.Right, y);
         }
         TextRenderer.DrawText(g, "通信速度  /  " + MainForm.FormatBitRate(ceiling), Font, new Point(10, 5), ForeColor);
-        TextRenderer.DrawText(g, historySeconds == 300 ? "5分前" : $"{historySeconds}秒前", Font, new Point(10, Height - 23), ForeColor);
+        TextRenderer.DrawText(g, "5分前", Font, new Point(10, Height - 23), ForeColor);
         TextRenderer.DrawText(g, "現在", Font, new Rectangle(0, Height - 23, Width - 10, 23), ForeColor, TextFormatFlags.Right);
         var data = samples.ToArray();
         if (data.Length < 2) return;
-        Draw(dark ? Color.FromArgb(78, 222, 166) : TrafficIcons.ReceiveColor, x => x.Down);
-        Draw(dark ? Color.FromArgb(255, 112, 124) : TrafficIcons.SendColor, x => x.Up);
+        Draw(TrafficIcons.ReceiveColor, x => x.Down);
+        Draw(TrafficIcons.SendColor, x => x.Up);
 
         void Draw(Color color, Func<(double Down, double Up), double> select)
         {
             using var pen = new Pen(color, 2);
-            var points = data.Select((x, i) => new PointF(area.Right - (data.Length - 1 - i) * area.Width / historySeconds,
+            var points = data.Select((x, i) => new PointF(area.Right - (data.Length - 1 - i) * area.Width / HistorySeconds,
                 area.Bottom - (float)(select(x) / ceiling) * area.Height)).ToArray();
             g.DrawLines(pen, points);
         }
