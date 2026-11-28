@@ -88,11 +88,25 @@ internal sealed class InvestigationView : UserControl
             e.Handled = e.SuppressKeyPress = true;
         };
         secondary.Control.SelectionChanged += (_, _) => { if (!updatingTables) ShowDetails(); };
+        ProcessContextMenu.Attach(primary, GetProcessTargets);
+        ProcessContextMenu.Attach(secondary, GetProcessTargets);
         back.Click += (_, _) => { expandedAddress = null; RenderBreakdown(); };
         timer.Tick += (_, _) => ReadRecording();
         VisibleChanged += (_, _) => { if (Visible && !ending) RenderTables(); };
         RenderChoices();
         RenderStatus();
+    }
+
+    private static IEnumerable<ProcessTarget> GetProcessTargets(object value)
+    {
+        IReadOnlyList<InvestigationRow> rows = value switch
+        {
+            InvestigationGroup group => group.Rows,
+            InvestigationRow row => [row],
+            _ => []
+        };
+        return rows.Select(row => new ProcessTarget(new ProcessIdentity(row.Key.Process.Pid, row.Key.Process.StartedUtcTicks),
+            row.Path is not null ? Path.GetFileName(row.Path) : "発生元未確認"));
     }
 
     internal void SetInterface(TrafficInterface? adapter)

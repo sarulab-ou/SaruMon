@@ -1,10 +1,6 @@
-using System.ComponentModel;
 using System.Net;
 using System.Net.Sockets;
-using System.Runtime.InteropServices;
-using System.Text;
 using Microsoft.Diagnostics.Tracing;
-using Microsoft.Win32.SafeHandles;
 
 namespace SaruMon.Monitoring;
 
@@ -146,20 +142,8 @@ internal sealed class InvestigationCapture
         return identity.Started <= time.UtcTicks ? identity : null;
     }
 
-    private static (long Started, string? Path) ResolveProcess(int pid, DateTimeOffset eventTime)
-    {
-        try
-        {
-            using var handle = OpenProcess(0x1000, false, pid); // PROCESS_QUERY_LIMITED_INFORMATION
-            if (handle.IsInvalid || !GetProcessTimes(handle, out var created, out _, out _, out _)) return default;
-            var started = DateTime.FromFileTimeUtc(created).Ticks;
-            if (started > eventTime.UtcTicks) return default;
-            var length = MaxPathLength + 1;
-            var path = new StringBuilder(length);
-            return (started, QueryFullProcessImageName(handle, 0, path, ref length) ? path.ToString() : null);
-        }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or Win32Exception) { return default; }
-    }
+    private static (long Started, string? Path) ResolveProcess(int pid, DateTimeOffset eventTime) =>
+        WindowsProcesses.ReadImage(pid, eventTime.UtcTicks, MaxPathLength);
 
     private sealed class Entry(InvestigationKey key, string? path, DateTimeOffset time)
     {
@@ -178,15 +162,4 @@ internal sealed class InvestigationCapture
         internal bool Resolved;
         internal string? Path;
     }
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern SafeProcessHandle OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, int pid);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetProcessTimes(SafeProcessHandle process, out long created, out long exited, out long kernel, out long user);
-
-    [DllImport("kernel32.dll", EntryPoint = "QueryFullProcessImageNameW", CharSet = CharSet.Unicode, SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool QueryFullProcessImageName(SafeProcessHandle process, uint flags, StringBuilder name, ref int size);
 }

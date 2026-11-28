@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.NetworkInformation;
 using SaruMon.Core;
+using SaruMon.Monitoring;
 using static SaruMon.DashboardStyle;
 
 namespace SaruMon;
@@ -73,6 +74,8 @@ internal sealed class TrafficOverview : UserControl
         destinations.Click += (_, _) => SelectGrouping(true);
         overview.Control.SelectionChanged += (_, _) => { if (!updating) RenderDetails(); };
         details.Control.SelectionChanged += (_, _) => { if (!updating) RenderEndpoint(); };
+        ProcessContextMenu.Attach(overview, value => value is LiveSocket[] group ? group.Select(row => row.Owner) : []);
+        ProcessContextMenu.Attach(details, value => value is LiveSocket row ? [row.Owner] : []);
         refresh.Tick += async (_, _) => await RefreshConnectionsAsync();
         VisibleChanged += async (_, _) =>
         {
@@ -160,13 +163,13 @@ internal sealed class TrafficOverview : UserControl
         var capturedAt = DateTime.UtcNow;
         var tcp = ReadTable(readTcp, selected);
         var udp = ReadTable(readUdp, selected);
-        var names = (tcp ?? []).Select(row => row.ProcessId).Concat((udp ?? []).Select(row => row.ProcessId))
-            .OfType<int>().Distinct().ToDictionary(pid => pid, pid => ReadProcessName(pid, capturedAt) ?? "不明");
-        string Name(int? pid) => pid is int value ? names[value] : "不明";
+        var owners = (tcp ?? []).Select(row => row.ProcessId).Concat((udp ?? []).Select(row => row.ProcessId))
+            .OfType<int>().Distinct().ToDictionary(pid => pid, pid => ReadOwner(pid, capturedAt));
+        ProcessTarget Owner(int? pid) => pid is int value ? owners[value] : new ProcessTarget(default, "不明");
         var rows = (tcp ?? []).Select(row => new LiveSocket(row.LocalAddress, row.LocalPort,
-                new IPEndPoint(row.RemoteAddress, row.RemotePort), row.ProcessId, row.State, Name(row.ProcessId)))
+                new IPEndPoint(row.RemoteAddress, row.RemotePort), row.State, Owner(row.ProcessId)))
             .Concat((udp ?? []).Select(row => new LiveSocket(row.LocalAddress, row.LocalPort, null,
-                row.ProcessId, null, Name(row.ProcessId)))).ToArray();
+                null, Owner(row.ProcessId)))).ToArray();
         return new LiveSnapshot(rows, tcp?.Count, udp?.Count);
     }
 
@@ -176,14 +179,16 @@ internal sealed class TrafficOverview : UserControl
         catch (Exception ex) when (ex is NetworkInformationException or IOException or InvalidDataException) { return null; }
     }
 
-    private static string? ReadProcessName(int pid, DateTime capturedAt)
+    private static ProcessTarget ReadOwner(int pid, DateTime capturedAt)
     {
         try
         {
             using var process = Process.GetProcessById(pid);
-            return process.StartTime.ToUniversalTime() <= capturedAt ? process.ProcessName : null;
+            var started = process.StartTime.ToUniversalTime();
+            if (started <= capturedAt) return new ProcessTarget(new ProcessIdentity(pid, started.Ticks), process.ProcessName);
         }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or Win32Exception) { return null; }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or Win32Exception) { }
+        return new ProcessTarget(new ProcessIdentity(pid, 0), "不明");
     }
 
     private void SelectGrouping(bool destinationsFirst)
@@ -239,7 +244,7 @@ internal sealed class TrafficOverview : UserControl
         updating = true;
         try
         {
-            details.Set(rows.Select(row => new ResultRow((row.ProcessId, row.LocalAddress, row.LocalPort, row.Remote), row,
+            details.Set(rows.Select(row => new ResultRow((row.Owner.Identity, row.LocalAddress, row.LocalPort, row.Remote), row,
                 byDestination ? [$"{row.PidLabel} / {row.Application}", row.Port.ToString(), row.Status]
                     : [row.Address, row.IsUdp ? "UDP" : "TCP", row.Port.ToString(), row.Status])).ToArray());
         }
@@ -280,10 +285,11 @@ internal sealed class TrafficOverview : UserControl
 
     private sealed record LiveSnapshot(LiveSocket[] Rows, int? TcpCount, int? UdpCount);
 
-    private sealed record LiveSocket(IPAddress LocalAddress, int LocalPort, IPEndPoint? Remote, int? ProcessId,
-        TcpState? TcpState, string Application)
+    private sealed record LiveSocket(IPAddress LocalAddress, int LocalPort, IPEndPoint? Remote, TcpState? TcpState, ProcessTarget Owner)
     {
         internal bool IsUdp => Remote is null;
+        internal int? ProcessId => Owner.Identity.Pid > 0 ? Owner.Identity.Pid : null;
+        internal string Application => Owner.Name;
         internal string PidLabel => ProcessId?.ToString() ?? "—";
         internal int Port => Remote?.Port ?? LocalPort;
         internal string Address

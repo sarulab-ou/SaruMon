@@ -32,6 +32,12 @@ internal static class Program
         }
         try
         {
+            if (args.Length == 1 && args[0] == "--process-test-child")
+            {
+                Console.WriteLine("READY");
+                Console.ReadLine();
+                return 0;
+            }
             if (args.Length == 1 && args[0] == "--udp-live-smoke")
                 return UdpLiveSmoke.RunAsync().GetAwaiter().GetResult();
             if (args.Length == 1 && args[0] == "--tcp-live-smoke")
@@ -50,7 +56,7 @@ internal static class Program
                 + TcpConnectionTests.Run() + UdpEndpointTests.Run() + ReverseDnsTests.Run() + UpdateTests.Run()
                 + UdpFlowTests.Run() + TrafficProtocolTests.Run() + ConnectionLogTests.Run()
                 + TcpPeerTests.Run() + TcpLogTests.Run()
-                + SingleInstanceTests.Run() + InstallationTests.Run() + InvestigationTests.Run();
+                + SingleInstanceTests.Run() + InstallationTests.Run() + InvestigationTests.Run() + ProcessTests.Run();
             Console.WriteLine($"PASS: {count} tests");
             return 0;
         }

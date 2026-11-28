@@ -29,6 +29,7 @@ internal sealed class MainForm : Form
     // Reuse the existing TCP monitor lifecycle without opening its log view.
     private readonly TcpPeerView tcpMonitor = new() { Visible = false };
     private readonly InvestigationView investigation = new();
+    private readonly TasksView tasks = new();
     private readonly ToolTip tips = new();
     private readonly CheckBox unicastOnly = new() { Text = "ユニキャスト通信だけで棒を表示", AutoSize = true, Anchor = AnchorStyles.Left };
     private readonly ToolStripMenuItem unicastOnlyMenu = new("ユニキャスト通信だけで棒を表示") { CheckOnClick = true };
@@ -101,22 +102,30 @@ internal sealed class MainForm : Form
         var tabs = new TabControl { Dock = DockStyle.Fill, Margin = Padding.Empty };
         var trafficPage = new TabPage("通信量") { BackColor = DashboardStyle.Canvas };
         var investigationPage = new TabPage("調査") { BackColor = DashboardStyle.Canvas };
+        var tasksPage = new TabPage("タスク") { BackColor = DashboardStyle.Canvas };
         trafficPage.Controls.Add(overview);
         investigationPage.Controls.Add(investigation);
-        tabs.TabPages.AddRange([trafficPage, investigationPage]);
+        tasksPage.Controls.Add(tasks);
+        tabs.TabPages.AddRange([trafficPage, investigationPage, tasksPage]);
         tabs.SelectedIndexChanged += (_, _) =>
         {
-            var investigating = tabs.SelectedTab == investigationPage;
+            var trafficSelected = tabs.SelectedTab == trafficPage;
+            var taskSelected = tabs.SelectedTab == tasksPage;
+            tasks.SetActive(taskSelected && Visible);
             body.SuspendLayout();
             try
             {
-                body.RowStyles[3].Height = investigating ? 0 : 70;
-                body.RowStyles[4].Height = investigating ? 0 : 27;
+                body.RowStyles[0].Height = taskSelected ? 0 : 28;
+                body.RowStyles[1].Height = taskSelected ? 0 : 40;
+                interfaceHeading.Visible = choose.Visible = !taskSelected;
+                body.RowStyles[3].Height = trafficSelected ? 70 : 0;
+                body.RowStyles[4].Height = trafficSelected ? 27 : 0;
                 foreach (var row in new[] { 3, 4 })
-                    if (body.GetControlFromPosition(0, row) is { } control) control.Visible = !investigating;
+                    if (body.GetControlFromPosition(0, row) is { } control) control.Visible = trafficSelected;
             }
             finally { body.ResumeLayout(); }
         };
+        VisibleChanged += (_, _) => tasks.SetActive(Visible && tabs.SelectedTab == tasksPage);
         body.Controls.Add(tabs, 0, 2);
 
         var options = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Margin = Padding.Empty };
@@ -427,7 +436,7 @@ internal sealed class MainForm : Form
         "SaruMon アイコンを常に表示する", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
     private void ShowHelp() => MessageBox.Show(this,
-        "1. 監視するインタフェースを選択します。\n2. 通知領域に格納すると、白地の棒グラフで通信量を確認できます。\n\n左の緑は受信で、上から下へ伸びます。右の赤は送信で、下から上へ伸びます。\n1秒ごとに、通信量に応じて1ピクセル刻みで伸びます。約8.2 kbps以下の通信は1ピクセル、約134.2 Mbps以上は最大の高さです。\n通信がない方向の棒は消え、未接続はオレンジの × です。\n「ユニキャスト通信だけで棒を表示」をオンにすると、ユニキャスト通信があった方向だけ棒を表示します。高さはその方向の全通信量です。\n管理者権限は不要で、TCP・UDPとLAN内の個別通信を含みます。設定は次回起動時も引き継ぎます。\n「TCP通信の目安で棒を表示」では、選択した回線とPC全体のTCPで同じ区間に通信が増えた方向を表示します。高さはその方向の全通信量です。\nPC内や別回線のTCPが選択回線のUDPと重なると点灯する場合があります。管理者権限は不要です。\n通知領域メニューの「通知領域をTCP通信だけにする（管理者権限）」をオンにすると、選択インタフェースのTCPの棒と速度を通知領域に表示します。\nPC内で完結する通信は除きます。TCP観測は起動時にオフです。\n「通信量」タブには、回線全体の速度・合計・直近5分のグラフと、現在のTCP接続を表示します。\n通常権限で「アプリ別」にTCP接続とUDPのローカルIP・ポート・PIDを表示します。UDPの宛先IP・ポートは「調査」で確認できます。\n速度はビット毎秒（bps、kbps、Mbpsなど）で表示します。合計の単位はバイトです。\n合計は現在のインタフェースを選択してからの通信量です。\n\n「調査」タブの「記録開始（管理者）」でTCP・UDP通信を記録します。\n「アプリ別」または「宛先別」でまとめ、同じIPへの通信の内訳を確認できます。\n上りはTCPとUDPの合計、下りはTCPの観測量です。\n停止後も「調査レポート…」でMarkdown、「全件CSV…」で集計を保存できます。\n\nアイコンが隠れている場合は、タスクバー右端の ∧ を開き、SaruMon を時計の近くへドラッグしてください。\nアイコンのクリック、または SaruMon の再起動で画面が開きます。\n終了するには、メニューの「終了」を選びます。\n\n更新は「ヘルプ → 更新を確認」から実行できます。",
+        "1. 監視するインタフェースを選択します。\n2. 通知領域に格納すると、白地の棒グラフで通信量を確認できます。\n\n左の緑は受信で、上から下へ伸びます。右の赤は送信で、下から上へ伸びます。\n1秒ごとに、通信量に応じて1ピクセル刻みで伸びます。約8.2 kbps以下の通信は1ピクセル、約134.2 Mbps以上は最大の高さです。\n通信がない方向の棒は消え、未接続はオレンジの × です。\n「ユニキャスト通信だけで棒を表示」をオンにすると、ユニキャスト通信があった方向だけ棒を表示します。高さはその方向の全通信量です。\n管理者権限は不要で、TCP・UDPとLAN内の個別通信を含みます。設定は次回起動時も引き継ぎます。\n「TCP通信の目安で棒を表示」では、選択した回線とPC全体のTCPで同じ区間に通信が増えた方向を表示します。高さはその方向の全通信量です。\nPC内や別回線のTCPが選択回線のUDPと重なると点灯する場合があります。管理者権限は不要です。\n通知領域メニューの「通知領域をTCP通信だけにする（管理者権限）」をオンにすると、選択インタフェースのTCPの棒と速度を通知領域に表示します。\nPC内で完結する通信は除きます。TCP観測は起動時にオフです。\n「通信量」タブには、回線全体の速度・合計・直近5分のグラフと、現在のTCP接続を表示します。\n通常権限で「アプリ別」にTCP接続とUDPのローカルIP・ポート・PIDを表示します。UDPの宛先IP・ポートは「調査」で確認できます。\n速度はビット毎秒（bps、kbps、Mbpsなど）で表示します。合計の単位はバイトです。\n合計は現在のインタフェースを選択してからの通信量です。\n\n「調査」タブの「記録開始（管理者）」でTCP・UDP通信を記録します。\n「アプリ別」または「宛先別」でまとめ、同じIPへの通信の内訳を確認できます。\n上りはTCPとUDPの合計、下りはTCPの観測量です。\n停止後も「調査レポート…」でMarkdown、「全件CSV…」で集計を保存できます。\n\n「タスク」タブで実行中のプロセス、CPU使用率、メモリ、親プロセスなどを確認できます。列見出しで並べ替えられます。\n各タブの一覧で右クリックすると、タスクの終了を要求できます。強制終了は対象のPIDを確認してから実行します。\n\nアイコンが隠れている場合は、タスクバー右端の ∧ を開き、SaruMon を時計の近くへドラッグしてください。\nアイコンのクリック、または SaruMon の再起動で画面が開きます。\n終了するには、メニューの「終了」を選びます。\n\n更新は「ヘルプ → 更新を確認」から実行できます。",
         "SaruMon の使い方", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
     public async void RequestExit()
