@@ -47,7 +47,7 @@ internal static class Program
                 return 0;
             }
             var count = TrafficTests.Run() + TrafficIconsTests.Run()
-                + TcpConnectionTests.Run() + ReverseDnsTests.Run() + UpdateTests.Run()
+                + TcpConnectionTests.Run() + UdpEndpointTests.Run() + ReverseDnsTests.Run() + UpdateTests.Run()
                 + UdpFlowTests.Run() + TrafficProtocolTests.Run() + ConnectionLogTests.Run()
                 + TcpPeerTests.Run() + TcpLogTests.Run()
                 + SingleInstanceTests.Run() + InstallationTests.Run() + InvestigationTests.Run();

@@ -12,7 +12,6 @@ internal sealed class InvestigationView : UserControl
     private readonly TrafficGraph graph = new() { Dock = DockStyle.Fill, Margin = new Padding(0, 2, 0, 4) };
     private readonly Button start = ActionButton("記録開始（管理者）", accent: true);
     private readonly Button stop = ActionButton("停止");
-    private readonly Button demoButton = ActionButton("デモ");
     private readonly Button save = ActionButton("調査レポート…");
     private readonly Button csv = ActionButton("全件CSV…");
     private readonly Button back = ActionButton("← 宛先一覧");
@@ -27,9 +26,7 @@ internal sealed class InvestigationView : UserControl
     private TrafficInterface? selectedInterface;
     private TrafficInterface? recordedInterface;
     private InvestigationRecord? recording;
-    private InvestigationRecord? demo;
     private InvestigationSnapshot? lastSnapshot;
-    private readonly Queue<(double Down, double Up)> recordedGraph = new();
     private string? expandedAddress;
     private bool busy;
     private bool ending;
@@ -47,7 +44,7 @@ internal sealed class InvestigationView : UserControl
         foreach (var height in new[] { 34, 23, 94, 32 }) layout.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
-        layout.Controls.Add(Strip(start, stop, demoButton, save, csv), 0, 0);
+        layout.Controls.Add(Strip(start, stop, save, csv), 0, 0);
         layout.Controls.Add(status, 0, 1);
         layout.Controls.Add(graph, 0, 2);
         layout.Controls.Add(Strip([.. groupButtons, Caption("並べ替え　"), .. sortButtons]), 0, 3);
@@ -66,7 +63,6 @@ internal sealed class InvestigationView : UserControl
 
         start.Click += async (_, _) => await StartAsync();
         stop.Click += async (_, _) => await StopAsync();
-        demoButton.Click += (_, _) => ToggleDemo();
         save.Click += (_, _) => ShowReport();
         csv.Click += async (_, _) => await SaveCsvAsync();
         for (var i = 0; i < groupButtons.Length; i++)
@@ -124,7 +120,6 @@ internal sealed class InvestigationView : UserControl
             lastSnapshot = null;
             expandedAddress = null;
             notice = null;
-            recordedGraph.Clear();
             graph.Reset();
             RenderTables();
             timer.Start();
@@ -174,8 +169,8 @@ internal sealed class InvestigationView : UserControl
             var deltaSent = changed ? InvestigationReport.Sum(newRows, row => row.Sent) - InvestigationReport.Sum(recording.Rows, row => row.Sent) : 0;
             var deltaReceived = changed ? InvestigationReport.Sum(newRows, row => row.Received) - InvestigationReport.Sum(recording.Rows, row => row.Received) : 0;
             // A delayed refresh occupies its elapsed slots instead of compressing the time axis.
-            for (var i = 1; i < Math.Round(Math.Min(300, seconds)); i++) AddRecordingSample(0, 0);
-            AddRecordingSample(Math.Max(0, deltaReceived) / seconds, Math.Max(0, deltaSent) / seconds);
+            for (var i = 1; i < Math.Round(Math.Min(300, seconds)); i++) graph.Add(0, 0);
+            graph.Add(Math.Max(0, deltaReceived) / seconds, Math.Max(0, deltaSent) / seconds);
             recording = recording with { Rows = newRows, Started = earliest < recording.Started ? earliest : recording.Started,
                 Ended = snapshot.SampledAt < recording.Started ? recording.Started : snapshot.SampledAt,
                 DroppedEvents = snapshot.DroppedEvents, Incomplete = snapshot.Incomplete };
@@ -195,32 +190,23 @@ internal sealed class InvestigationView : UserControl
         RenderStatus();
     }
 
-    private void AddRecordingSample(double down, double up)
-    {
-        recordedGraph.Enqueue((down, up));
-        if (recordedGraph.Count > 301) recordedGraph.Dequeue();
-        graph.Add(down, up);
-    }
-
     private void RenderStatus()
     {
-        var data = demo ?? recording;
-        start.Enabled = !busy && !client.IsRunning && demo is null && selectedInterface is { IsUp: true, Addresses.Count: > 0 };
+        var data = recording;
+        start.Enabled = !busy && !client.IsRunning && selectedInterface is { IsUp: true, Addresses.Count: > 0 };
         stop.Enabled = !busy && (client.IsRunning || client.Error?.Contains("停止を再試行", StringComparison.Ordinal) == true);
-        demoButton.Enabled = !busy && !client.IsRunning;
-        demoButton.Text = demo is null ? "デモ" : "デモを終了";
         save.Enabled = csv.Enabled = data is not null && !busy;
-        var phase = demo is not null ? "デモ · 架空データ" : client.IsRunning ? "記録中" : data is null ? "未記録" : "停止";
+        var phase = client.IsRunning ? "記録中" : data is null ? "未記録" : "停止";
         var label = data is null ? phase + " · 回線を選んで記録を開始" :
             $"{phase} · {data.Interface} · {data.Rows.Count:N0} 行 · 発生元未確認 {data.Rows.Count(row => row.Path is null):N0} 行";
         if (data?.Incomplete == true) label += $" · 部分記録（未記録イベント {data.DroppedEvents:N0}）";
-        status.Text = demo is null && notice is not null ? label + " · " + notice : label;
-        status.ForeColor = data?.Incomplete == true || notice is not null && demo is null ? Warning : Muted;
+        status.Text = notice is not null ? label + " · " + notice : label;
+        status.ForeColor = data?.Incomplete == true || notice is not null ? Warning : Muted;
     }
 
     private void RenderTables()
     {
-        var rows = (demo ?? recording)?.Rows ?? [];
+        var rows = recording?.Rows ?? [];
         var byAddress = grouping == 1;
         var groups = byAddress ? InvestigationReport.Destinations(rows) : InvestigationReport.Applications(rows);
         updatingTables = true;
@@ -312,45 +298,9 @@ internal sealed class InvestigationView : UserControl
         [group.Label, MainForm.FormatBytes(group.Sent, compact: true),
             group.IncludesTcp ? MainForm.FormatBytes(group.Received, compact: true) : "—", group.LastSeen.ToLocalTime().ToString("HH:mm:ss")]);
 
-    private void ToggleDemo()
-    {
-        if (busy || client.IsRunning) return;
-        if (demo is not null)
-        {
-            demo = null;
-            graph.Reset();
-            foreach (var (down, up) in recordedGraph) graph.Add(down, up);
-        }
-        else
-        {
-            var now = new DateTimeOffset(2026, 11, 28, 12, 5, 0, TimeSpan.FromHours(9));
-            var rows = new[]
-            {
-                Sample(4120, @"C:\Demo\Northwind Browser.exe", "198.51.100.24", 443, InvestigationProtocol.Tcp, 820_410, 9_121_138, 3),
-                Sample(4120, @"C:\Demo\Northwind Browser.exe", "198.51.100.24", 443, InvestigationProtocol.Udp, 470_700, 0, 7),
-                Sample(7820, @"C:\Demo\Lab Sync.exe", "198.51.100.24", 8443, InvestigationProtocol.Tcp, 5_910_114, 1_410_822, 12),
-                Sample(7820, @"C:\Demo\Lab Sync.exe", "203.0.113.53", 443, InvestigationProtocol.Tcp, 920_982, 316_008, 24),
-                Sample(6540, @"C:\Demo\Meeting Audio.exe", "2001:db8::75", 3478, InvestigationProtocol.Udp, 2_622_405, 0, 31),
-                Sample(2916, @"C:\Demo\Status Client.exe", "192.0.2.18", 443, InvestigationProtocol.Tcp, 85_107, 984_024, 47)
-            };
-            demo = new InvestigationRecord("Wi-Fi（表示例）", now.AddMinutes(-5), now, rows, 0, false, true);
-            graph.Reset();
-            for (var i = 0; i <= 300; i++)
-                graph.Add(8_000 + 66_000 * Math.Pow(Math.Sin(i / 22.0), 6) + (i % 11) * 500,
-                    3_000 + 42_000 * Math.Pow(Math.Sin((i + 19) / 27.0), 8) + (i % 7) * 400);
-
-            InvestigationRow Sample(int pid, string path, string address, int port, InvestigationProtocol protocol, long up, long down, int seconds) =>
-                new(new(new(pid, now.AddHours(-1).UtcTicks), address, port, protocol), path, up, down, 20 + seconds,
-                    now.AddMinutes(-3).AddSeconds(seconds), now.AddSeconds(-seconds));
-        }
-        expandedAddress = null;
-        RenderTables();
-        RenderStatus();
-    }
-
     private void ShowReport()
     {
-        if ((demo ?? recording) is not { } data) return;
+        if (recording is not { } data) return;
         var application = grouping == 0 ? primary.Selected?.Value as InvestigationGroup : null;
         using var preview = new Form { Text = "調査レポートのプレビュー", ClientSize = new Size(830, 530),
             MinimumSize = new Size(540, 340), StartPosition = FormStartPosition.CenterParent, MinimizeBox = false, MaximizeBox = true };
@@ -378,7 +328,7 @@ internal sealed class InvestigationView : UserControl
             try
             {
                 var markdown = await Task.Run(() => InvestigationReport.Markdown(data, selected, selected is null ? null :
-                    data.Demo ? "HKCU\\Run · Demo Sync（架空の登録）" : InvestigationReport.StartupMatches(selected.Rows[0].Path)));
+                    InvestigationReport.StartupMatches(selected.Rows[0].Path)));
                 if (!preview.IsDisposed)
                 {
                     previewMarkdown = markdown;
@@ -409,7 +359,7 @@ internal sealed class InvestigationView : UserControl
 
     private async Task SaveCsvAsync()
     {
-        if ((demo ?? recording) is { } data)
+        if (recording is { } data)
             await SaveFileAsync(this, "CSV (*.csv)|*.csv", "csv", path => InvestigationReport.SaveCsv(path, data));
     }
 

@@ -48,32 +48,15 @@ public static class TcpConnections
 
     private static IEnumerable<TcpConnectionInfo> ReadOwnerTable(AddressFamily family)
     {
-        const uint bufferTooSmall = 122;
         const int ownerPidConnections = 4;
-        var length = 0;
-        var status = GetExtendedTcpTable(null, ref length, false, (int)family, ownerPidConnections, 0);
-        for (var attempt = 0; status == bufferTooSmall && attempt < 3; attempt++)
-        {
-            if (length is < 4 or > 32 * 1024 * 1024) throw new InvalidDataException("TCP接続表のサイズが不正です。");
-            var buffer = new byte[length];
-            status = GetExtendedTcpTable(buffer, ref length, false, (int)family, ownerPidConnections, 0);
-            if (status == 0)
-            {
-                if (length < 4 || length > buffer.Length) throw new InvalidDataException("TCP接続表のサイズが不正です。");
-                return ReadOwnerRows(buffer.AsSpan(0, length), family);
-            }
-        }
-        if (status != 0) throw new NetworkInformationException((int)status);
-        return [];
+        return ReadOwnerRows(SocketOwnerTable.Read(family, ownerPidConnections, GetExtendedTcpTable).Span, family);
     }
 
     private static TcpConnectionInfo[] ReadOwnerRows(ReadOnlySpan<byte> bytes, AddressFamily family)
     {
         var ipv4 = family == AddressFamily.InterNetwork;
         var rowSize = ipv4 ? 24 : 56;
-        if (bytes.Length < 4) throw new InvalidDataException("TCP接続表が不完全です。");
-        var count = BinaryPrimitives.ReadInt32LittleEndian(bytes);
-        if (count < 0 || count > (bytes.Length - 4) / rowSize) throw new InvalidDataException("TCP接続表の行数が不正です。");
+        var count = SocketOwnerTable.ReadCount(bytes, rowSize);
         var result = new TcpConnectionInfo[count];
         for (var index = 0; index < count; index++)
         {
@@ -103,7 +86,7 @@ public static class TcpConnections
         ArgumentNullException.ThrowIfNull(selectedLocalAddresses);
         var selected = selectedLocalAddresses
             .Where(IsSpecifiedAddress)
-            .Select(NormalizeAddress)
+            .Select(SocketOwnerTable.NormalizeAddress)
             .ToHashSet();
         if (selected.Count == 0) return Array.Empty<TcpConnectionInfo>();
 
@@ -113,7 +96,7 @@ public static class TcpConnections
                 && connection.RemotePort is > 0 and <= 65535
                 && IsSpecifiedAddress(connection.LocalAddress)
                 && IsSpecifiedAddress(connection.RemoteAddress)
-                && selected.Contains(NormalizeAddress(connection.LocalAddress)))
+                && selected.Contains(SocketOwnerTable.NormalizeAddress(connection.LocalAddress)))
             .OrderBy(connection => connection.RemoteAddress.ToString(), StringComparer.Ordinal)
             .ThenBy(connection => connection.RemotePort)
             .ThenBy(connection => connection.LocalAddress.ToString(), StringComparer.Ordinal)
@@ -122,13 +105,10 @@ public static class TcpConnections
             .ToArray();
     }
 
-    private static IPAddress NormalizeAddress(IPAddress address) => address.IsIPv4MappedToIPv6
-        ? address.MapToIPv4() : address;
-
     private static bool IsSpecifiedAddress(IPAddress address)
     {
         if (address.AddressFamily is not (AddressFamily.InterNetwork or AddressFamily.InterNetworkV6)) return false;
-        var normalized = NormalizeAddress(address);
+        var normalized = SocketOwnerTable.NormalizeAddress(address);
         return !normalized.Equals(IPAddress.Any) && !normalized.Equals(IPAddress.IPv6Any);
     }
 }

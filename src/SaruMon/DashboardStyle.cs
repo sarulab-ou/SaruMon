@@ -82,11 +82,16 @@ internal sealed class ResultGrid
 
     internal void Headers(params string[] names)
     {
-        if (Control.Columns.Count == names.Length && names.Select((name, index) => Control.Columns[index].HeaderText == name).All(same => same)) return;
+        var dimensions = names.Length == 4 ? new[] { 120, 66, 66, 91 } : new[] { 121, 60, 53, 64, 64 };
+        Headers(names.Select((name, index) => (name, dimensions[index])).ToArray());
+    }
+
+    internal void Headers(params (string Title, int Width)[] columns)
+    {
+        if (Control.Columns.Count == columns.Length && columns.Select((column, index) => Control.Columns[index].HeaderText == column.Title).All(same => same)) return;
         Control.RowCount = 0;
         Control.Columns.Clear();
-        var dimensions = names.Length == 4 ? new[] { 120, 66, 66, 91 } : new[] { 121, 60, 53, 64, 64 };
-        for (var i = 0; i < names.Length; i++) AddColumn(names[i], dimensions[i]);
+        foreach (var (title, width) in columns) AddColumn(title, width);
         Control.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
     }
 

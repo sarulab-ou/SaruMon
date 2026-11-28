@@ -15,7 +15,7 @@ internal sealed record InvestigationGroup(string Key, string Label, Investigatio
 }
 
 internal sealed record InvestigationRecord(string Interface, DateTimeOffset Started, DateTimeOffset Ended,
-    IReadOnlyList<InvestigationRow> Rows, long DroppedEvents, bool Incomplete, bool Demo = false);
+    IReadOnlyList<InvestigationRow> Rows, long DroppedEvents, bool Incomplete);
 
 internal static class InvestigationReport
 {
@@ -53,7 +53,7 @@ internal static class InvestigationReport
         var destinationsWritten = 0;
         var detailsWritten = 0;
         Append("# SaruMon 通信調査\n\n");
-        Append($"- 対象: {Cell(record.Interface, 256)} / {Cell(application?.Label ?? "全体", 1024)}{(record.Demo ? "（デモ）" : "")}\n"
+        Append($"- 対象: {Cell(record.Interface, 256)} / {Cell(application?.Label ?? "全体", 1024)}\n"
             + $"- 観測: {Time(record.Started)} ～ {Time(record.Ended)}\n"
             + $"- 集計: 宛先 {destinations.Length} 件、内訳 {rows.Count} 行、発生元未確認 {rows.Count(row => row.Path is null)} 行\n"
             + $"- 上り（TCP+UDP）: {Number(Sum(rows, row => row.Sent))} B / 下り（TCP）: {(rows.Any(row => row.Key.Protocol == InvestigationProtocol.Tcp) ? Number(Sum(rows, row => row.Received)) + " B" : "未観測")}\n"

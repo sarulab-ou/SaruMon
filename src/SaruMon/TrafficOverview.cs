@@ -10,28 +10,31 @@ namespace SaruMon;
 internal sealed class TrafficOverview : UserControl
 {
     private readonly System.Windows.Forms.Timer refresh = new() { Interval = 2000 };
-    private readonly Func<IPAddress[], IReadOnlyList<TcpConnectionInfo>> read;
+    private readonly Func<IPAddress[], IReadOnlyList<TcpConnectionInfo>> readTcp;
+    private readonly Func<IPAddress[], IReadOnlyList<UdpEndpointInfo>> readUdp;
     private readonly TrafficGraph graph = new() { Dock = DockStyle.Fill, Margin = new Padding(0, 2, 0, 4) };
     private readonly Label receive = Caption();
     private readonly Label send = Caption();
-    private readonly Label listTitle = Caption("現在の TCP 接続");
+    private readonly Label listTitle = Caption("接続を表示できる回線がありません");
     private readonly Label detailTitle = Caption("選択した項目の内訳");
     private readonly Label endpoint = Caption();
     private readonly Button applications = ActionButton("アプリ別", accent: true);
     private readonly Button destinations = ActionButton("宛先別");
-    private readonly ResultGrid overview = new("現在のTCP接続の集計", ("アプリ", 175), ("PID", 58), ("接続数", 72));
-    private readonly ResultGrid details = new("現在のTCP接続の内訳", ("宛先IP", 147), ("ポート", 63), ("状態", 89));
+    private readonly ResultGrid overview = new("TCP 接続と UDP ローカルポートの集計");
+    private readonly ResultGrid details = new("選択した項目の内訳");
     private (string Id, string Addresses)? selection;
     private IPAddress[] addresses = [];
-    private LiveConnection[] connections = [];
+    private LiveSnapshot? snapshot;
     private bool byDestination;
     private bool updating;
     private bool reading;
     private int revision;
 
-    internal TrafficOverview(Func<IPAddress[], IReadOnlyList<TcpConnectionInfo>>? read = null)
+    internal TrafficOverview(Func<IPAddress[], IReadOnlyList<TcpConnectionInfo>>? readTcp = null,
+        Func<IPAddress[], IReadOnlyList<UdpEndpointInfo>>? readUdp = null)
     {
-        this.read = read ?? TcpConnections.ReadWithOwners;
+        this.readTcp = readTcp ?? TcpConnections.ReadWithOwners;
+        this.readUdp = readUdp ?? UdpEndpoints.ReadWithOwners;
         Dock = DockStyle.Fill;
         BackColor = Canvas;
         ForeColor = Ink;
@@ -126,8 +129,7 @@ internal sealed class TrafficOverview : UserControl
         selection = key;
         addresses = next;
         revision++;
-        connections = [];
-        listTitle.Text = next.Length == 0 ? "接続を表示できる回線がありません" : "現在の TCP 接続を取得中…";
+        snapshot = null;
         RenderConnections();
         if (Visible && IsHandleCreated && next.Length > 0)
         {
@@ -147,27 +149,31 @@ internal sealed class TrafficOverview : UserControl
         {
             var current = await Task.Run(() => ReadConnections(selected));
             if (IsDisposed || !Visible || requested != revision) return;
-            connections = current;
-            listTitle.Text = $"現在の TCP 接続 · {current.Length:N0} 件";
-            RenderConnections();
-        }
-        catch (Exception ex) when (ex is NetworkInformationException or IOException or InvalidDataException)
-        {
-            if (IsDisposed || requested != revision) return;
-            connections = [];
-            listTitle.Text = "現在の TCP 接続を取得できません";
+            snapshot = current;
             RenderConnections();
         }
         finally { reading = false; }
     }
 
-    private LiveConnection[] ReadConnections(IPAddress[] selected)
+    private LiveSnapshot ReadConnections(IPAddress[] selected)
     {
         var capturedAt = DateTime.UtcNow;
-        var rows = read(selected);
-        var names = rows.Where(row => row.ProcessId.HasValue).Select(row => row.ProcessId!.Value).Distinct()
-            .ToDictionary(pid => pid, pid => ReadProcessName(pid, capturedAt));
-        return rows.Select(row => new LiveConnection(row, row.ProcessId is int pid ? names[pid] ?? "不明" : "不明")).ToArray();
+        var tcp = ReadTable(readTcp, selected);
+        var udp = ReadTable(readUdp, selected);
+        var names = (tcp ?? []).Select(row => row.ProcessId).Concat((udp ?? []).Select(row => row.ProcessId))
+            .OfType<int>().Distinct().ToDictionary(pid => pid, pid => ReadProcessName(pid, capturedAt) ?? "不明");
+        string Name(int? pid) => pid is int value ? names[value] : "不明";
+        var rows = (tcp ?? []).Select(row => new LiveSocket(row.LocalAddress, row.LocalPort,
+                new IPEndPoint(row.RemoteAddress, row.RemotePort), row.ProcessId, row.State, Name(row.ProcessId)))
+            .Concat((udp ?? []).Select(row => new LiveSocket(row.LocalAddress, row.LocalPort, null,
+                row.ProcessId, null, Name(row.ProcessId)))).ToArray();
+        return new LiveSnapshot(rows, tcp?.Count, udp?.Count);
+    }
+
+    private static IReadOnlyList<T>? ReadTable<T>(Func<IPAddress[], IReadOnlyList<T>> read, IPAddress[] selected)
+    {
+        try { return read(selected); }
+        catch (Exception ex) when (ex is NetworkInformationException or IOException or InvalidDataException) { return null; }
     }
 
     private static string? ReadProcessName(int pid, DateTime capturedAt)
@@ -190,41 +196,69 @@ internal sealed class TrafficOverview : UserControl
 
     private void RenderConnections()
     {
+        listTitle.Text = snapshot is { } current
+            ? $"TCP 接続 {CountLabel(current.TcpCount)}" + (byDestination ? "" : $" · UDP ローカル {CountLabel(current.UdpCount)}")
+            : addresses.Length == 0 ? "接続を表示できる回線がありません" : "接続とポートを取得中…";
         updating = true;
         try
         {
-            overview.Control.Columns[0].HeaderText = byDestination ? "宛先IP" : "アプリ";
-            overview.Control.Columns[1].HeaderText = byDestination ? "PID数" : "PID";
-            details.Control.Columns[0].HeaderText = byDestination ? "PID / アプリ" : "宛先IP";
-            var groups = connections.GroupBy(row => byDestination ? row.Address : row.Entry.ProcessId?.ToString() ?? "—", StringComparer.Ordinal);
-            overview.Set(groups.OrderByDescending(group => group.Count()).ThenBy(group => group.Key, StringComparer.Ordinal)
-                .Select(group => new ResultRow(group.Key, group.ToArray(),
-                    [byDestination ? group.Key : group.First().Application,
-                        byDestination ? group.Select(row => row.Entry.ProcessId).Where(pid => pid.HasValue).Distinct().Count().ToString() : group.Key,
-                        group.Count().ToString()])).ToArray());
+            var rows = snapshot?.Rows ?? [];
+            if (byDestination)
+            {
+                overview.Headers(("宛先IP", 175), ("PID数", 58), ("接続数", 72));
+                details.Headers(("PID / アプリ", 147), ("ポート", 63), ("状態", 89));
+                overview.Set(Group(rows.Where(row => !row.IsUdp), row => row.Address)
+                    .Select(group => new ResultRow(group.Key, group.ToArray(),
+                        [group.Key, group.Select(row => row.ProcessId).OfType<int>().Distinct().Count().ToString(), group.Count().ToString()])).ToArray());
+            }
+            else
+            {
+                overview.Headers(("アプリ", 160), ("PID", 60), ("TCP", 50), ("UDP", 50));
+                details.Headers(("IP アドレス", 150), ("種別", 55), ("ポート", 65), ("状態", 80));
+                overview.Set(Group(rows, row => row.PidLabel)
+                    .Select(group => new ResultRow(group.Key, group.ToArray(),
+                        [group.First().Application, group.Key, CountRows(group.Count(row => !row.IsUdp), snapshot?.TcpCount),
+                            CountRows(group.Count(row => row.IsUdp), snapshot?.UdpCount)])).ToArray());
+            }
         }
         finally { updating = false; }
         RenderDetails();
     }
 
+    private static string CountLabel(int? count) => count is int value ? $"{value:N0} 件" : "取得不可";
+
+    private static string CountRows(int count, int? total) => total.HasValue ? count.ToString("N0") : "—";
+
+    private static IOrderedEnumerable<IGrouping<string, LiveSocket>> Group(IEnumerable<LiveSocket> rows, Func<LiveSocket, string> key) =>
+        rows.GroupBy(key, StringComparer.Ordinal).OrderByDescending(group => group.Count()).ThenBy(group => group.Key, StringComparer.Ordinal);
+
     private void RenderDetails()
     {
-        var rows = overview.Selected?.Value as LiveConnection[] ?? [];
+        var rows = overview.Selected?.Value as LiveSocket[] ?? [];
         detailTitle.Text = overview.Selected is { } group ? $"{group.Cells[0]} の内訳" : "選択した項目の内訳";
         updating = true;
         try
         {
-            details.Set(rows.Select(row => new ResultRow(row.Entry, row,
-                [byDestination ? $"{row.Entry.ProcessId?.ToString() ?? "—"} / {row.Application}" : row.Address,
-                    row.Entry.RemotePort.ToString(), State(row.Entry.State)])).ToArray());
+            details.Set(rows.Select(row => new ResultRow((row.ProcessId, row.LocalAddress, row.LocalPort, row.Remote), row,
+                byDestination ? [$"{row.PidLabel} / {row.Application}", row.Port.ToString(), row.Status]
+                    : [row.Address, row.IsUdp ? "UDP" : "TCP", row.Port.ToString(), row.Status])).ToArray());
         }
         finally { updating = false; }
         RenderEndpoint();
     }
 
-    private void RenderEndpoint() => endpoint.Text = details.Selected?.Value is LiveConnection row
-        ? $"{row.Application} · PID {row.Entry.ProcessId?.ToString() ?? "—"}  ·  {new IPEndPoint(row.Entry.LocalAddress, row.Entry.LocalPort)} → {new IPEndPoint(row.Entry.RemoteAddress, row.Entry.RemotePort)}"
-        : "上のグラフと合計は選択回線全体。下の一覧は現在の TCP 接続。";
+    private void RenderEndpoint()
+    {
+        if (details.Selected?.Value is not LiveSocket row)
+        {
+            endpoint.Text = "UDP の一覧はアプリ別で確認できます。";
+            return;
+        }
+
+        var local = new IPEndPoint(row.LocalAddress, row.LocalPort);
+        var location = row.Remote is { } remote ? $"TCP · {local} → {remote}" : $"UDP ローカル · {local}（{row.Status}）";
+        endpoint.Text = $"{location} · {row.Application} · PID {row.PidLabel}";
+    }
 
     internal static string Rate(double? bytesPerSecond) => bytesPerSecond.HasValue ? MainForm.FormatBitRate(bytesPerSecond.Value) : "—";
 
@@ -244,8 +278,25 @@ internal sealed class TrafficOverview : UserControl
         base.Dispose(disposing);
     }
 
-    private sealed record LiveConnection(TcpConnectionInfo Entry, string Application)
+    private sealed record LiveSnapshot(LiveSocket[] Rows, int? TcpCount, int? UdpCount);
+
+    private sealed record LiveSocket(IPAddress LocalAddress, int LocalPort, IPEndPoint? Remote, int? ProcessId,
+        TcpState? TcpState, string Application)
     {
-        internal string Address => (Entry.RemoteAddress.IsIPv4MappedToIPv6 ? Entry.RemoteAddress.MapToIPv4() : Entry.RemoteAddress).ToString();
+        internal bool IsUdp => Remote is null;
+        internal string PidLabel => ProcessId?.ToString() ?? "—";
+        internal int Port => Remote?.Port ?? LocalPort;
+        internal string Address
+        {
+            get
+            {
+                var address = Remote?.Address ?? LocalAddress;
+                return (address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address).ToString();
+            }
+        }
+        internal string Status => TcpState is { } state ? State(state)
+            : LocalAddress.Equals(IPAddress.Any) ? "全 IPv4"
+            : LocalAddress.Equals(IPAddress.IPv6Any) ? "全 IPv6"
+            : "ローカル";
     }
 }
