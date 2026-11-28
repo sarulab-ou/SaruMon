@@ -22,6 +22,7 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
     private IReadOnlyList<UdpFlowInfo> udpSnapshot = Array.Empty<UdpFlowInfo>();
     private IReadOnlyList<TcpPeerInfo> tcpSnapshot = Array.Empty<TcpPeerInfo>();
     private TcpTrafficSnapshot? tcpTraffic;
+    private InvestigationSnapshot? investigationSnapshot;
     private string? error;
     private bool running;
     private bool disposed;
@@ -41,6 +42,7 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
     public IReadOnlyList<UdpFlowInfo> UdpSnapshot => Volatile.Read(ref udpSnapshot);
     public IReadOnlyList<TcpPeerInfo> TcpSnapshot => Volatile.Read(ref tcpSnapshot);
     public TcpTrafficSnapshot? TcpTraffic => Volatile.Read(ref tcpTraffic);
+    public InvestigationSnapshot? InvestigationSnapshot => Volatile.Read(ref investigationSnapshot);
     public string? Error => Volatile.Read(ref error);
     public long DroppedEvents => Interlocked.Read(ref droppedEvents);
 
@@ -69,7 +71,7 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
                 WindowStyle = ProcessWindowStyle.Hidden,
                 WorkingDirectory = Path.GetDirectoryName(path)!
             };
-            foreach (var argument in new[] { "--traffic-helper", mode == MonitoringMode.Udp ? "udp" : "tcp", pipeName, nonce,
+            foreach (var argument in new[] { "--traffic-helper", TrafficWireProtocol.ModeArgument(mode), pipeName, nonce,
                 parent.Id.ToString(CultureInfo.InvariantCulture),
                 parent.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture), TrafficProcessSecurity.CurrentSid })
                 start.ArgumentList.Add(argument);
@@ -104,6 +106,7 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
 
     public async Task SetLocalAddressesAsync(IReadOnlyCollection<IPAddress> addresses, CancellationToken token)
     {
+        if (mode == MonitoringMode.Investigation) throw new InvalidOperationException("調査中の対象は固定されています。");
         var normalized = TrafficWireProtocol.ParseAddresses(addresses.Select(address => address.ToString()).ToArray());
         await gate.WaitAsync(token).ConfigureAwait(false);
         try
@@ -133,6 +136,7 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
 
     public async Task ResetLogAsync(CancellationToken token)
     {
+        if (mode == MonitoringMode.Investigation) throw new InvalidOperationException("新しい調査を開始してください。");
         await gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
@@ -168,6 +172,7 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
 
     private async Task ReadSnapshotsAsync(TrafficChannel activeChannel, CancellationToken token)
     {
+        var investigation = mode == MonitoringMode.Investigation ? new InvestigationBatches() : null;
         try
         {
             while (!token.IsCancellationRequested)
@@ -182,12 +187,18 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
                 {
                     if (message.Revision != revision) continue;
                     if (mode == MonitoringMode.Udp) Volatile.Write(ref udpSnapshot, Array.AsReadOnly(message.UdpFlows!));
-                    else
+                    else if (mode == MonitoringMode.Tcp)
                     {
                         Volatile.Write(ref tcpSnapshot, Array.AsReadOnly(message.TcpPeers!));
                         var reading = message.TcpTraffic!;
                         if (message.CaptureLoss) reading = reading with { Incomplete = true };
                         Volatile.Write(ref tcpTraffic, new TcpTrafficSnapshot(tcpTrafficRevision, reading));
+                    }
+                    else
+                    {
+                        var next = investigation!.Add(message);
+                        if (next is null) continue;
+                        Volatile.Write(ref investigationSnapshot, next);
                     }
                     Interlocked.Exchange(ref droppedEvents, message.DroppedEvents);
                     Volatile.Write(ref error, message.DroppedEvents > 0 || message.CaptureLoss
@@ -209,6 +220,7 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
             // Closing the pipe is also the helper's independent stop signal.
             pipe?.Dispose();
         }
+
     }
 
     public async Task StopAsync()
@@ -292,6 +304,7 @@ internal sealed class TrafficMonitorClient : IAsyncDisposable
         Volatile.Write(ref udpSnapshot, Array.Empty<UdpFlowInfo>());
         Volatile.Write(ref tcpSnapshot, Array.Empty<TcpPeerInfo>());
         Volatile.Write(ref tcpTraffic, null);
+        Volatile.Write(ref investigationSnapshot, null);
     }
 
     internal static string SafeError(string? message) => string.IsNullOrWhiteSpace(message) ? "通信監視に失敗しました。"

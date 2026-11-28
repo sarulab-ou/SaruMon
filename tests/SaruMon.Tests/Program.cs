@@ -38,6 +38,8 @@ internal static class Program
                 return TcpLiveSmoke.RunAsync().GetAwaiter().GetResult();
             if (args.Length == 1 && args[0] == "--tcp-network-smoke")
                 return TcpNetworkSmoke.RunAsync().GetAwaiter().GetResult();
+            if (args.Length == 1 && args[0] == "--investigation-live-smoke")
+                return InvestigationTests.RunLiveAsync().GetAwaiter().GetResult();
             if (args.Length == 2 && args[0] == "--icon-preview")
             {
                 TrafficIconsTests.WritePreview(args[1]);
@@ -48,7 +50,7 @@ internal static class Program
                 + TcpConnectionTests.Run() + ReverseDnsTests.Run() + UpdateTests.Run()
                 + UdpFlowTests.Run() + TrafficProtocolTests.Run() + ConnectionLogTests.Run()
                 + TcpPeerTests.Run() + TcpLogTests.Run()
-                + SingleInstanceTests.Run() + InstallationTests.Run();
+                + SingleInstanceTests.Run() + InstallationTests.Run() + InvestigationTests.Run();
             Console.WriteLine($"PASS: {count} tests");
             return 0;
         }

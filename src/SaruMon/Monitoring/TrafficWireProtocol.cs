@@ -7,20 +7,59 @@ using SaruMon.Core;
 
 namespace SaruMon.Monitoring;
 
-internal enum MonitoringMode { Udp, Tcp }
+internal enum MonitoringMode { Udp, Tcp, Investigation }
 
 internal sealed record TrafficMessage(string Type, string? Nonce = null, string[]? Addresses = null,
     UdpFlowInfo[]? UdpFlows = null, TcpPeerInfo[]? TcpPeers = null, string? Error = null,
     long Revision = 0, long DroppedEvents = 0, bool CaptureLoss = false, bool Final = false,
-    MonitoringMode? Mode = null, TcpTrafficReading? TcpTraffic = null);
+    MonitoringMode? Mode = null, TcpTrafficReading? TcpTraffic = null,
+    InvestigationRow[]? InvestigationRows = null, DateTimeOffset SampledAt = default, int Chunk = 0, bool More = false);
 
 internal sealed record TcpTrafficReading(long ReceivedBytes, long SentBytes, long SampledAtTicks, bool Incomplete);
 internal sealed record TcpTrafficSnapshot(long Revision, TcpTrafficReading Reading);
+
+internal sealed class InvestigationBatches
+{
+    private readonly Dictionary<InvestigationKey, InvestigationRow> rows = new();
+    private readonly Dictionary<InvestigationKey, InvestigationRow> pending = new();
+    private IReadOnlyList<InvestigationRow> latest = Array.Empty<InvestigationRow>();
+    private int nextChunk;
+    private DateTimeOffset batchTime;
+
+    internal InvestigationSnapshot? Add(TrafficMessage message)
+    {
+        if (message.Chunk != nextChunk || nextChunk > 0 && message.SampledAt != batchTime)
+            throw new InvalidDataException("調査データの順序が不正です。");
+        batchTime = message.SampledAt;
+        foreach (var row in message.InvestigationRows!)
+        {
+            if (!pending.TryAdd(row.Key, row) || pending.Count > TrafficWireProtocol.MaxEntries)
+                throw new InvalidDataException("調査データの件数が不正です。");
+        }
+        if (message.More)
+        {
+            nextChunk++;
+            return null;
+        }
+        if (rows.Count + pending.Keys.Count(key => !rows.ContainsKey(key)) > TrafficWireProtocol.MaxEntries)
+            throw new InvalidDataException("調査データの上限を超えました。");
+        if (pending.Count > 0)
+        {
+            foreach (var (key, row) in pending) rows[key] = row;
+            latest = Array.AsReadOnly(rows.Values.ToArray());
+        }
+        pending.Clear();
+        nextChunk = 0;
+        return new InvestigationSnapshot(latest, message.SampledAt, message.DroppedEvents,
+            message.CaptureLoss || message.DroppedEvents > 0);
+    }
+}
 
 internal static class TrafficWireProtocol
 {
     internal const int MaxAddresses = 128;
     internal const int MaxEntries = 2048;
+    internal const int InvestigationChunkSize = 96;
     internal const int MaxLineChars = 1024 * 1024;
     internal static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -32,7 +71,15 @@ internal static class TrafficWireProtocol
     internal static bool IsPipeName(string value) => value.StartsWith("SaruMon-Monitor-", StringComparison.Ordinal)
         && value.Length == 48 && value.AsSpan(16).ToString().All(Uri.IsHexDigit);
 
-    internal static bool IsMode(MonitoringMode mode) => mode is MonitoringMode.Udp or MonitoringMode.Tcp;
+    internal static bool IsMode(MonitoringMode mode) => mode is MonitoringMode.Udp or MonitoringMode.Tcp or MonitoringMode.Investigation;
+
+    internal static string ModeArgument(MonitoringMode mode) => mode switch
+    {
+        MonitoringMode.Udp => "udp",
+        MonitoringMode.Tcp => "tcp",
+        MonitoringMode.Investigation => "investigation",
+        _ => throw new ArgumentOutOfRangeException(nameof(mode))
+    };
 
     internal static IPAddress[] ParseAddresses(string[]? addresses)
     {
@@ -54,6 +101,30 @@ internal static class TrafficWireProtocol
         if (!IsMode(expectedMode) || message.Mode != expectedMode || message.Type != "snapshot"
             || message.Revision <= 0 || message.DroppedEvents < 0)
             throw new InvalidDataException("通信監視データが不正です。");
+        if (expectedMode == MonitoringMode.Investigation)
+        {
+            if (message.UdpFlows is not null || message.TcpPeers is not null || message.TcpTraffic is not null
+                || message.InvestigationRows is null || message.InvestigationRows.Length > InvestigationChunkSize
+                || message.SampledAt == default || message.Chunk < 0 || message.More && message.Final
+                || message.More && message.InvestigationRows.Length != InvestigationChunkSize)
+                throw new InvalidDataException("調査データが不正です。");
+            foreach (var row in message.InvestigationRows)
+            {
+                if (row is null || row.Key.Process.Pid < 0 || row.Key.Process.StartedUtcTicks < 0
+                    || row.Key.Process.StartedUtcTicks > DateTime.MaxValue.Ticks
+                    || row.Path is { Length: > InvestigationCapture.MaxPathLength }
+                    || (row.Path is not null && row.Key.Process.StartedUtcTicks == 0)
+                    || row.Key.Port is < 1 or > 65535 || row.Key.Protocol is not (InvestigationProtocol.Tcp or InvestigationProtocol.Udp)
+                    || row.Sent < 0 || row.Received < 0 || row.Events <= 0
+                    || row.Key.Protocol == InvestigationProtocol.Udp && row.Received != 0
+                    || row.FirstSeen == default || row.LastSeen < row.FirstSeen)
+                    throw new InvalidDataException("調査の集計行が不正です。");
+                ParseAddress(row.Key.Address);
+            }
+            return;
+        }
+        if (message.InvestigationRows is not null || message.Chunk != 0 || message.More || message.SampledAt != default)
+            throw new InvalidDataException("調査モード以外の通信データが不正です。");
         if (expectedMode == MonitoringMode.Tcp)
         {
             if (message.UdpFlows is not null || message.TcpPeers is null || message.TcpPeers.Length > MaxEntries

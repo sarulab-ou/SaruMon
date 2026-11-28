@@ -4,6 +4,12 @@
 
 ## 確認状況
 
+### v0.1.17
+
+自動テスト 224 件に成功しました。同じ宛先IPへの TCP と UDP の統合、アプリを選んだ場合の内訳、IPv4とIPv6の表記、PID再利用、上限、停止時の最終集計、MarkdownとCSVを確認しました。合成データを使い、最小サイズで見出し行を外した配置、調査画面と宛先の展開、2,048行での並べ替えと選択保持を確認しました。
+
+IPv4・IPv6の実イベント試験には管理者権限が必要です。通常権限の検証環境ではETWセッションを開始できませんでした。
+
 ### v0.1.16
 
 自動テスト 218 件に成功しました。16 / 20 / 24 / 32 ピクセルで、待機・受信・送信・最大表示・未接続時の通信量アイコンの枠が CPU アイコンと一致することを確認しました。合成データによる画面検証 43 項目にも成功しました。
@@ -135,6 +141,8 @@ dotnet run --project tests/SaruMon.Tests/SaruMon.Tests.csproj --configuration Re
 ```
 
 TCP のローカル実機試験は `--tcp-live-smoke`、公開 GitHub ページへの認証なし HEAD による実回線試験は `--tcp-network-smoke` を指定します。どちらも明示実行のみで、通常テストや CI では動きません。
+
+調査のETWイベントを確認するには、管理者権限のPowerShellで `dotnet run --project tests/SaruMon.Tests/SaruMon.Tests.csproj --configuration Release -- --investigation-live-smoke` を実行します。試験用のIPv4・IPv6ループバック通信について、同じ宛先・ポートのTCP送受信とUDP送信が実行ファイルのパスとともに取得できることを確認します。
 
 ## 通信モニターの実機確認
 

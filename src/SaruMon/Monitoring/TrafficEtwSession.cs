@@ -15,10 +15,10 @@ internal sealed class TrafficEtwSession : IDisposable
     private (uint Events, uint Buffers) lastLoss;
     internal string Name { get; }
 
-    internal TrafficEtwSession(string name)
+    internal TrafficEtwSession(string name, bool includeProcesses = false)
     {
         Name = name;
-        using var properties = new PropertiesBuffer(sessionGuid);
+        using var properties = new PropertiesBuffer(sessionGuid, includeProcesses);
         var status = StartTrace(out var createdHandle, name, properties.Pointer);
         if (status == 183)
             throw new InvalidOperationException("SaruMon の通信監視セッションが既に存在します。別の監視を終了してください。異常終了後の場合は Windows を再起動してからお試しください。");
@@ -87,7 +87,7 @@ internal sealed class TrafficEtwSession : IDisposable
     private sealed class PropertiesBuffer : IDisposable
     {
         internal IntPtr Pointer { get; }
-        internal PropertiesBuffer(Guid sessionGuid)
+        internal PropertiesBuffer(Guid sessionGuid, bool includeProcesses = false)
         {
             var structureSize = Marshal.SizeOf<TraceProperties>();
             var totalSize = structureSize + 2048;
@@ -101,7 +101,7 @@ internal sealed class TrafficEtwSession : IDisposable
                 MaximumBuffers = 128,
                 LogFileMode = 0x02000000 | 0x00000100, // SYSTEM_LOGGER_MODE | REAL_TIME_MODE
                 FlushTimer = 1,
-                EnableFlags = 0x00010000 | 0x10000000, // NETWORK_TCPIP | NO_SYSCONFIG
+                EnableFlags = 0x00010000 | 0x10000000 | (includeProcesses ? 1u : 0u), // NETWORK_TCPIP | NO_SYSCONFIG | PROCESS
                 LoggerNameOffset = (uint)structureSize,
                 LogFileNameOffset = 0 // No ETL file and no packet payload provider.
             };

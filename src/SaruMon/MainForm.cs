@@ -9,6 +9,7 @@ namespace SaruMon;
 internal sealed class MainForm : Form
 {
     private static readonly string[] BitRateUnits = ["bps", "kbps", "Mbps", "Gbps", "Tbps"];
+    private static readonly string[] ByteUnits = ["B", "KiB", "MiB", "GiB", "TiB"];
     private readonly AppSettings settings = AppSettings.Load();
     private readonly TrafficSampler sampler = new();
     private readonly TcpIndicatorSampler tcpIndicatorSampler = new();
@@ -22,7 +23,6 @@ internal sealed class MainForm : Form
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 1000 };
     private readonly ComboBox adapter = new() { DropDownStyle = ComboBoxStyle.DropDownList, MaxDropDownItems = 12, Dock = DockStyle.Fill, AccessibleName = "監視するインタフェース" };
     private readonly Label adapterDetail = new() { Dock = DockStyle.Fill, AutoEllipsis = true, ForeColor = Color.FromArgb(104, 116, 134) };
-    private readonly Label connection = new() { AutoSize = true, Anchor = AnchorStyles.Right, Padding = new Padding(10, 8, 10, 8) };
     private readonly Label receiveRate = RateLabel();
     private readonly Label sendRate = RateLabel();
     private readonly Label receiveTotal = DetailLabel();
@@ -31,6 +31,7 @@ internal sealed class MainForm : Form
     private readonly TrafficGraph graph = new() { Dock = DockStyle.Fill, Margin = new Padding(0, 16, 0, 0) };
     private readonly ConnectionsView connections = new();
     private readonly UdpConnectionsView udpConnections = new();
+    private readonly InvestigationView investigation = new();
     private readonly ToolTip tips = new();
     private readonly CheckBox unicastOnly = new() { Text = "ユニキャスト通信だけで棒を表示", AutoSize = true, Anchor = AnchorStyles.Left };
     private readonly ToolStripMenuItem unicastOnlyMenu = new("ユニキャスト通信だけで棒を表示") { CheckOnClick = true };
@@ -80,19 +81,13 @@ internal sealed class MainForm : Form
         menu.Items.AddRange([file, help]);
         MainMenuStrip = menu;
 
-        var body = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24, 12, 24, 14), ColumnCount = 1, RowCount = 7 };
-        foreach (var height in new[] { 64, 28, 40, 48 }) body.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
+        var body = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24, 12, 24, 14), ColumnCount = 1, RowCount = 6 };
+        foreach (var height in new[] { 28, 40, 48 }) body.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
         body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         body.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
         body.RowStyles.Add(new RowStyle(SizeType.Absolute, 27));
 
-        var header = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        header.Controls.Add(new Label { Text = "SaruMon", Font = new Font("Yu Gothic UI", 26, FontStyle.Bold), AutoSize = true, Anchor = AnchorStyles.Left }, 0, 0);
-        header.Controls.Add(connection, 1, 0);
-        body.Controls.Add(header, 0, 0);
-        body.Controls.Add(new Label { Text = "監視するインタフェース", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 1);
+        body.Controls.Add(new Label { Text = "監視するインタフェース", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 0);
         var choose = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
         choose.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         choose.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 94));
@@ -100,8 +95,8 @@ internal sealed class MainForm : Form
         var refresh = new Button { Text = "再読み込み", Dock = DockStyle.Fill, Margin = new Padding(10, 0, 0, 3) };
         refresh.Click += (_, _) => RefreshAdapters();
         choose.Controls.Add(refresh, 1, 0);
-        body.Controls.Add(choose, 0, 2);
-        body.Controls.Add(adapterDetail, 0, 3);
+        body.Controls.Add(choose, 0, 1);
+        body.Controls.Add(adapterDetail, 0, 2);
 
         var rates = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
         rates.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
@@ -112,6 +107,7 @@ internal sealed class MainForm : Form
         var trafficPage = new TabPage("通信量") { BackColor = BackColor };
         var peersPage = new TabPage("接続先（TCP）") { BackColor = Color.White };
         var detailPage = new TabPage("UDP 送信先") { BackColor = Color.White };
+        var investigationPage = new TabPage("調査");
         var trafficLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(6), Margin = Padding.Empty };
         trafficLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 112));
         trafficLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -126,8 +122,24 @@ internal sealed class MainForm : Form
         trafficPage.Controls.Add(trafficLayout);
         peersPage.Controls.Add(connections);
         detailPage.Controls.Add(udpConnections);
-        tabs.TabPages.AddRange([trafficPage, peersPage, detailPage]);
-        body.Controls.Add(tabs, 0, 4);
+        investigationPage.Controls.Add(investigation);
+        tabs.TabPages.AddRange([trafficPage, peersPage, detailPage, investigationPage]);
+        tabs.SelectedIndexChanged += (_, _) =>
+        {
+            var investigating = tabs.SelectedTab == investigationPage;
+            body.SuspendLayout();
+            try
+            {
+                body.RowStyles[0].Height = investigating ? 24 : 28;
+                body.RowStyles[2].Height = investigating ? 0 : 48;
+                body.RowStyles[4].Height = investigating ? 0 : 70;
+                body.RowStyles[5].Height = investigating ? 0 : 27;
+                foreach (var row in new[] { 2, 4, 5 })
+                    if (body.GetControlFromPosition(0, row) is { } control) control.Visible = !investigating;
+            }
+            finally { body.ResumeLayout(); }
+        };
+        body.Controls.Add(tabs, 0, 3);
 
         var options = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Margin = Padding.Empty };
         options.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -165,11 +177,11 @@ internal sealed class MainForm : Form
         options.Controls.Add(indicatorOptions, 0, 1);
         options.SetColumnSpan(indicatorOptions, 2);
         tips.SetToolTip(tcpOnly, "選択したインタフェースのローカルIPでTCPを観測し、速度・合計・グラフ・通知領域の棒に表示します。\n相手ごとのTCP監視と同じ観測を使い、このPC内で完結する通信は表示から除きます。");
-        body.Controls.Add(options, 0, 5);
+        body.Controls.Add(options, 0, 4);
         footer.Text = "1秒ごとに更新 · × を押しても監視を続けます";
         footer.Dock = DockStyle.Fill;
         footer.TextAlign = ContentAlignment.MiddleLeft;
-        body.Controls.Add(footer, 0, 6);
+        body.Controls.Add(footer, 0, 5);
         Controls.Add(body);
         Controls.Add(menu);
 
@@ -261,6 +273,7 @@ internal sealed class MainForm : Form
     {
         connections.SetInterface((adapter.SelectedItem as AdapterChoice)?.Interface);
         udpConnections.SetInterface((adapter.SelectedItem as AdapterChoice)?.Interface);
+        investigation.SetInterface((adapter.SelectedItem as AdapterChoice)?.Interface);
         if (adapter.SelectedItem is not AdapterChoice choice) { adapterDetail.Text = "利用できるインタフェースがありません。"; return; }
         var item = choice.Interface;
         adapterDetail.Text = item == null ? "再接続を待っています。このインタフェースの選択を保持します。" :
@@ -410,8 +423,6 @@ internal sealed class MainForm : Form
             else if (tcpTraffic.Incomplete) status += "（一部未計測）";
         }
         var mode = tcpOnlyMode ? "TCP観測" : useTcp ? (onlyUnicast ? "TCP目安・ユニキャスト" : "TCP目安") : (onlyUnicast ? "ユニキャスト" : "全通信");
-        connection.Text = "● " + (tcpOnlyMode || useTcp || onlyUnicast ? mode + " " : "") + status;
-        connection.ForeColor = TrafficIcons.ColorFor(state);
         var download = tcpOnlyMode ? tcpTraffic?.DownloadBytesPerSecond : sample?.DownloadBytesPerSecond;
         var upload = tcpOnlyMode ? tcpTraffic?.UploadBytesPerSecond : sample?.UploadBytesPerSecond;
         var trafficIcon = icons.GetIcon(sample?.IsAvailable == true, receiving ? download.GetValueOrDefault() : 0,
@@ -420,10 +431,16 @@ internal sealed class MainForm : Form
         if (!ReferenceEquals(tray.Icon, trafficIcon)) tray.Icon = trafficIcon;
         if (!ReferenceEquals(Icon, trafficIcon)) Icon = trafficIcon;
         var name = (adapter.SelectedItem as AdapterChoice)?.Interface?.Name ?? "未選択";
-        if (name.Length > 10) name = name[..9] + "…";
+        const int tooltipLimit = 63;
+        const string namedTitle = "SaruMon · ";
         var scope = tcpOnlyMode ? "TCP" : "全体";
-        var tooltip = $"SaruMon · {name}\n{scope} ↓ {receiveRate.Text} ↑ {sendRate.Text}\n棒: {mode} · {status}";
-        if (tooltip.Length > 63) tooltip = tooltip[..63];
+        var rates = $"{scope} ↓ {receiveRate.Text} ↑ {sendRate.Text}";
+        var details = $"{rates}\n棒: {mode} · {status}";
+        var nameBudget = Math.Min(10, tooltipLimit - namedTitle.Length - details.Length - 1);
+        var title = nameBudget < 1 ? "SaruMon" : namedTitle + (name.Length <= nameBudget ? name : name[..(nameBudget - 1)] + "…");
+        var tooltip = $"{title}\n{details}";
+        if (tooltip.Length > tooltipLimit) tooltip = $"SaruMon\n{rates}\n{status}";
+        if (tooltip.Length > tooltipLimit) tooltip = tooltip[..tooltipLimit];
         if (tray.Text != tooltip) tray.Text = tooltip;
     }
 
@@ -467,6 +484,7 @@ internal sealed class MainForm : Form
         {
             await connections.ShutdownAsync();
             await udpConnections.ShutdownAsync();
+            await investigation.ShutdownAsync();
         }
         catch (Exception ex)
         {
@@ -522,12 +540,12 @@ internal sealed class MainForm : Form
         return bits.ToString(unit == 0 ? "0" : "0.#", System.Globalization.CultureInfo.CurrentCulture) + " " + BitRateUnits[unit];
     }
 
-    internal static string FormatBytes(double bytes)
+    internal static string FormatBytes(double bytes, bool compact = false)
     {
-        string[] units = ["B", "KiB", "MiB", "GiB", "TiB"];
         var unit = 0;
-        while (bytes >= 1024 && unit < units.Length - 1) { bytes /= 1024; unit++; }
-        return bytes.ToString(unit == 0 ? "0" : "0.0", System.Globalization.CultureInfo.CurrentCulture) + " " + units[unit];
+        while (bytes >= 1024 && unit < ByteUnits.Length - 1) { bytes /= 1024; unit++; }
+        var format = unit == 0 || compact && bytes >= 10 ? "0" : compact ? "0.#" : "0.0";
+        return bytes.ToString(format, System.Globalization.CultureInfo.CurrentCulture) + (compact ? "" : " ") + ByteUnits[unit];
     }
 
     private static Label RateLabel() => new() { AutoSize = true, Font = new Font("Yu Gothic UI", 25, FontStyle.Bold), Text = "—", Margin = Padding.Empty };
